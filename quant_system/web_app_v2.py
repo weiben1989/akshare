@@ -191,6 +191,49 @@ APPLE_STYLE = """
         padding: 14px !important;
         border-bottom: 1px solid #f5f5f7 !important;
     }
+
+    /* 强制所有文字为黑色 - 确保可读性 */
+    .stMarkdown, .stMarkdown p, .stMarkdown span, .stMarkdown div,
+    .stText, label, p, span, div, h1, h2, h3, h4, h5, h6,
+    [data-testid="stMarkdownContainer"], [data-testid="stText"],
+    .element-container, .row-widget, .stTextInput label,
+    .stDateInput label, .stSelectbox label, .stRadio label,
+    .stCheckbox label, .stExpander label {
+        color: #1d1d1f !important;
+    }
+
+    /* 确保输入框文字也是黑色 */
+    input, textarea, select {
+        color: #1d1d1f !important;
+    }
+
+    /* info/success/warning/error 框的文字 */
+    .stAlert, .stAlert p, .stAlert span, .stAlert div {
+        color: #1d1d1f !important;
+    }
+
+    /* 侧边栏文字 */
+    [data-testid="stSidebar"], [data-testid="stSidebar"] * {
+        color: #1d1d1f !important;
+    }
+
+    /* 确保背景是白色 */
+    .stApp, .main, [data-testid="stAppViewContainer"] {
+        background-color: #ffffff !important;
+    }
+
+    /* Expander（展开框）样式 */
+    .streamlit-expanderHeader {
+        background-color: #f5f5f7 !important;
+        color: #1d1d1f !important;
+        font-weight: 600 !important;
+    }
+
+    .streamlit-expanderContent {
+        background-color: #ffffff !important;
+        color: #1d1d1f !important;
+        border: 1px solid #d2d2d7 !important;
+    }
 </style>
 """
 
@@ -952,10 +995,12 @@ elif page == "🔍 日度复盘":
 
     st.markdown('<h2 class="section-title">日度复盘</h2>', unsafe_allow_html=True)
 
-    # DeepSeek API 配置
+    # DeepSeek API 配置 - 醒目提示
+    st.info("💡 **可选功能**：如果你有 DeepSeek API Key，可以在下方配置以获得AI智能解读。不填也能正常使用复盘功能！")
+
     st.markdown('<h3 class="subsection-title">⚙️ AI 解读配置（可选）</h3>', unsafe_allow_html=True)
 
-    with st.expander("🤖 DeepSeek API 设置", expanded=False):
+    with st.expander("🤖 DeepSeek API 设置 - 点击展开配置", expanded=True):
         st.markdown("""
         <div style="color: #1d1d1f; background-color: #f5f5f7; padding: 15px; border-radius: 10px; margin-bottom: 10px;">
             <p><strong>什么是 DeepSeek？</strong></p>
