@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 import pickle
 from pathlib import Path
 
+import pandas as pd
+
 # 添加父目录到路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -44,7 +46,10 @@ class DataDownloader:
         print("📊 [1/5] 下载宏观数据（GDP、CPI、PPI、PMI等）...")
         macro_data = self._download_macro_data()
         self._save_cache('macro_data', macro_data)
-        print(f"  ✓ 宏观数据下载完成，共{sum(len(v) for v in macro_data.values())}条记录\n")
+        total_macro_rows = sum(
+            len(v) for v in macro_data.values() if isinstance(v, pd.DataFrame)
+        )
+        print(f"  ✓ 宏观数据下载完成，共{total_macro_rows}条记录\n")
 
         # 2. 下载市场数据
         self.logger.info("2/5 下载市场数据...")
@@ -88,30 +93,40 @@ class DataDownloader:
     def _download_macro_data(self):
         """下载宏观数据"""
         macro_data = {}
+        cached_macro = self.load_cache('macro_data')
+        if not isinstance(cached_macro, dict):
+            cached_macro = {}
 
-        try:
-            # GDP
-            macro_data['gdp'] = self.api.get_macro_china_gdp()
+        fetch_tasks = {
+            'gdp': self.api.get_macro_china_gdp,
+            'cpi': self.api.get_macro_china_cpi,
+            'ppi': self.api.get_macro_china_ppi,
+            'pmi': self.api.get_macro_china_pmi,
+            'm2': self.api.get_macro_china_m2,
+            'social_financing': self.api.get_macro_china_social_financing,
+        }
 
-            # CPI
-            macro_data['cpi'] = self.api.get_macro_china_cpi()
+        for key, fetcher in fetch_tasks.items():
+            df = pd.DataFrame()
+            try:
+                df = fetcher()
+            except Exception as exc:
+                self.logger.error(f"下载宏观数据失败[{key}]: {exc}")
 
-            # PPI
-            macro_data['ppi'] = self.api.get_macro_china_ppi()
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                macro_data[key] = df
+                continue
 
-            # PMI
-            macro_data['pmi'] = self.api.get_macro_china_pmi()
-
-            # M2
-            macro_data['m2'] = self.api.get_macro_china_m2()
-
-            # 社融
-            macro_data['social_financing'] = self.api.get_macro_china_social_financing()
-
-        except Exception as e:
-            self.logger.error(f"下载宏观数据失败: {e}")
-            # 返回模拟数据
-            macro_data = self._get_mock_macro_data()
+            cached_df = cached_macro.get(key)
+            if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
+                macro_data[key] = cached_df
+                self.logger.warning(
+                    f"宏观数据 {key} 本次获取为空，已使用本地缓存的上一次成功结果"
+                )
+            else:
+                self.logger.warning(
+                    f"宏观数据 {key} 暂无可用记录，请检查网络或稍后重试"
+                )
 
         return macro_data
 
@@ -230,33 +245,6 @@ class DataDownloader:
         else:
             print("未找到缓存，请先运行下载")
             return False
-
-    def _get_mock_macro_data(self):
-        """获取模拟宏观数据（用于演示）"""
-        import pandas as pd
-        import numpy as np
-
-        dates = pd.date_range(end=datetime.now(), periods=36, freq='M')
-
-        return {
-            'gdp': pd.DataFrame({
-                '日期': dates[::3],  # 季度数据
-                'GDP': np.random.uniform(70000, 90000, 12)
-            }),
-            'cpi': pd.DataFrame({
-                '日期': dates,
-                'CPI': np.random.uniform(98, 103, 36)
-            }),
-            'ppi': pd.DataFrame({
-                '日期': dates,
-                'PPI': np.random.uniform(95, 107, 36)
-            }),
-            'pmi': pd.DataFrame({
-                '日期': dates,
-                'PMI': np.random.uniform(48, 52, 36)
-            })
-        }
-
 
 def main():
     """主函数"""

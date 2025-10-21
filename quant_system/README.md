@@ -23,6 +23,10 @@
    - 行业景气轮动
    - 市场情绪温度
    - 估值水平分位
+4. **经典资产配置**
+   - 内置斯文森捐赠组合与全天候策略
+   - 自动计算真实数据下的收益、波动率与回撤
+   - 与周期信号联动提供仓位与再平衡建议
 
 ## 🏗️ 系统架构
 
@@ -71,14 +75,27 @@ cd quant_system
 pip install -r requirements.txt
 ```
 
-### 2. 运行示例
+### 2. 下载真实数据（推荐）
 
-```python
-# 生成每日市场分析报告
+```bash
+python scripts/download_data.py
+```
+
+> 也可在 Streamlit 界面左侧点击“⬇️ 下载最新数据”，完成后系统会优先使用真实缓存数据。
+
+### 3. 生成每日市场分析报告
+
+```bash
 python main.py
 ```
 
-### 3. 使用示例
+### 4. 启动可视化面板
+
+```bash
+streamlit run web_app.py
+```
+
+### 5. 代码调用示例
 
 ```python
 from main import QuantSystem

@@ -22,6 +22,16 @@ import numpy as np
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 
+try:  # 某些接口在旧版本中未暴露到 akshare 顶层，需要按模块导入
+    from akshare.index.index_global_em import index_global_hist_em
+except Exception:  # pragma: no cover - 如果导入失败，运行时再处理
+    index_global_hist_em = None
+
+try:
+    from akshare.bond.bond_em import bond_zh_us_rate
+except Exception:  # pragma: no cover
+    bond_zh_us_rate = None
+
 from utils.logger import logger
 
 
@@ -234,10 +244,54 @@ class AKShareAPI:
     def get_stock_em_hsgt_north_net_flow_in(self) -> pd.DataFrame:
         """获取北向资金流向"""
         try:
-            df = ak.stock_em_hsgt_north_net_flow_in(indicator='沪股通')
-            return df
+            if hasattr(ak, 'stock_em_hsgt_north_net_flow_in'):
+                df = ak.stock_em_hsgt_north_net_flow_in(indicator='沪股通')
+                return df
+
+            if hasattr(ak, 'stock_hsgt_fund_flow_summary_em'):
+                df = ak.stock_hsgt_fund_flow_summary_em()
+                if not df.empty:
+                    # 仅保留北向资金相关数据
+                    df = df[df['类型'].str.contains('北', na=False)]
+                return df
+
+            raise AttributeError('未找到可用的北向资金接口')
         except Exception as e:
             self.logger.error(f"获取北向资金流向失败: {str(e)}")
+            return pd.DataFrame()
+
+    # ==================== 全球指数 / 债券 ====================
+
+    def get_index_global_hist(self, symbol: str) -> pd.DataFrame:
+        """获取全球指数历史行情"""
+
+        try:
+            if hasattr(ak, 'index_global_hist_em'):
+                return ak.index_global_hist_em(symbol=symbol)
+
+            if index_global_hist_em is not None:
+                return index_global_hist_em(symbol=symbol)
+
+            raise AttributeError('index_global_hist_em not available')
+        except Exception as e:
+            self.logger.error(f"获取全球指数{symbol}历史行情失败: {str(e)}")
+            return pd.DataFrame()
+
+    def get_us_treasury_yield(self, start_date: str = "19900101") -> pd.DataFrame:
+        """获取美国国债收益率（作为全球利率 / 债券 proxy）"""
+
+        if hasattr(ak, 'bond_zh_us_rate'):
+            func = ak.bond_zh_us_rate
+        else:
+            func = bond_zh_us_rate
+
+        if func is None:
+            return pd.DataFrame()
+
+        try:
+            return func(start_date=start_date)
+        except Exception as e:
+            self.logger.error(f"获取美国国债收益率失败: {str(e)}")
             return pd.DataFrame()
 
     # ==================== 估值数据 ====================
