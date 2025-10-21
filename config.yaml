@@ -1,0 +1,39 @@
+windows: [5, 10, 30]
+score_weights:
+  macro: 0.25
+  liquidity: 0.35
+  riskon: 0.20
+  momentum: 0.20
+allocation_rules:
+  - min: 70
+    max: 101
+    position: 85
+    style: "顺周期偏多/高股息+资源"
+    label: "进攻"
+  - min: 50
+    max: 70
+    position: 65
+    style: "均衡/轻偏顺周期"
+    label: "偏多"
+  - min: 30
+    max: 50
+    position: 45
+    style: "偏防守"
+    label: "谨慎"
+  - min: 0
+    max: 30
+    position: 30
+    style: "防御+现金"
+    label: "防守"
+etf_buckets:
+  broad: ["510300", "510500", "159915"]
+  growth: ["159949", "159915"]
+  value: ["510880", "510900"]
+  industry_resources: ["510170", "159980"]
+  industry_tech: ["159801", "159841"]
+paths:
+  sqlite: data/review.sqlite
+  parquet_dir: data/parquet
+flags:
+  enable_astro: true
+  enable_deepseek: false

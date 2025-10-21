@@ -22,4 +22,5 @@ colors
 #docs/source/_templates/
 .DS_Store
 /data
+/out
 /tests/data
