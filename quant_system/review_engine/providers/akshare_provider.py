@@ -404,6 +404,247 @@ class AkShareProvider:
             logger.error(f"获取北向资金失败: {e}")
             raise DataValidationError(f"北向资金数据获取失败: {e}")
 
+    def fetch_etf_flows(self, date: str) -> List[Dict]:
+        """
+        获取ETF流向（按分组）
+
+        Args:
+            date: 日期
+
+        Returns:
+            各分组的净流向数据列表
+        """
+        try:
+            etf_buckets = self.config.get('etf_buckets', {})
+            results = []
+
+            for bucket_name, bucket_config in etf_buckets.items():
+                codes = bucket_config.get('codes', [])
+                total_flow = 0.0
+
+                for code in codes:
+                    try:
+                        # 获取ETF份额数据
+                        df = self._retry_fetch(ak.fund_etf_fund_info_em, fund=code, indicator="单位净值走势")
+
+                        if df is None or df.empty:
+                            continue
+
+                        # 转换日期
+                        df['净值日期'] = pd.to_datetime(df['净值日期']).dt.strftime('%Y-%m-%d')
+                        df_date = df[df['净值日期'] == date]
+
+                        if not df_date.empty and '日增长率' in df_date.columns:
+                            # 使用日增长率作为流向代理
+                            flow = float(df_date['日增长率'].values[0])
+                            total_flow += flow
+
+                    except Exception as e:
+                        logger.warning(f"ETF {code} 数据获取失败: {e}")
+                        continue
+
+                results.append({
+                    'date': date,
+                    'bucket': bucket_name,
+                    'net_flow': total_flow
+                })
+
+            return results
+
+        except Exception as e:
+            logger.error(f"获取ETF流向失败: {e}")
+            return []
+
+    def fetch_margin(self, date: str) -> Dict[str, float]:
+        """
+        获取融资融券余额
+
+        Args:
+            date: 日期
+
+        Returns:
+            融资融券余额数据
+        """
+        try:
+            # 沪市融资融券
+            try:
+                sh_margin = self._retry_fetch(ak.stock_margin_sse, date=date.replace('-', ''))
+                sh_balance = 0.0
+                sh_buy = 0.0
+
+                if sh_margin is not None and not sh_margin.empty:
+                    if '融资余额' in sh_margin.columns:
+                        sh_balance = float(sh_margin['融资余额'].sum())
+                    if '融资买入额' in sh_margin.columns:
+                        sh_buy = float(sh_margin['融资买入额'].sum())
+            except:
+                logger.warning(f"沪市融资融券数据获取失败 (日期: {date})")
+                sh_balance = 0.0
+                sh_buy = 0.0
+
+            # 深市融资融券
+            try:
+                sz_margin = self._retry_fetch(ak.stock_margin_szse, date=date.replace('-', ''))
+                sz_balance = 0.0
+                sz_buy = 0.0
+
+                if sz_margin is not None and not sz_margin.empty:
+                    if '融资余额' in sz_margin.columns:
+                        sz_balance = float(sz_margin['融资余额'].sum())
+                    if '融资买入额' in sz_margin.columns:
+                        sz_buy = float(sz_margin['融资买入额'].sum())
+            except:
+                logger.warning(f"深市融资融券数据获取失败 (日期: {date})")
+                sz_balance = 0.0
+                sz_buy = 0.0
+
+            return {
+                'date': date,
+                'balance': sh_balance + sz_balance,
+                'buy_amount': sh_buy + sz_buy
+            }
+
+        except Exception as e:
+            logger.error(f"获取融资融券数据失败: {e}")
+            return {'date': date, 'balance': 0.0, 'buy_amount': 0.0}
+
+    def fetch_industry_data(self, date: str) -> pd.DataFrame:
+        """
+        聚合行业数据
+
+        Args:
+            date: 日期
+
+        Returns:
+            行业数据DataFrame
+        """
+        try:
+            # 获取A股实时数据
+            spot_df = self._retry_fetch(ak.stock_zh_a_spot_em)
+
+            if spot_df is None or spot_df.empty:
+                raise DataValidationError("A股快照数据为空")
+
+            # 查找行业字段
+            industry_col = None
+            for col in ['行业', '所属行业', '板块']:
+                if col in spot_df.columns:
+                    industry_col = col
+                    break
+
+            if industry_col is None:
+                logger.warning("未找到行业字段")
+                return pd.DataFrame()
+
+            # 按行业分组聚合
+            industry_stats = spot_df.groupby(industry_col).agg({
+                '涨跌幅': 'mean',
+                '换手率': 'mean',
+                '主力净流入': 'sum' if '主力净流入' in spot_df.columns else lambda x: 0
+            }).reset_index()
+
+            industry_stats.columns = ['industry_name', 'avg_return', 'avg_turnover', 'net_flow']
+            industry_stats['date'] = date
+
+            # 计算涨停家数
+            limit_up_count = spot_df[spot_df['涨跌幅'] >= 9.9].groupby(industry_col).size().to_dict()
+            industry_stats['limit_up_count'] = industry_stats['industry_name'].map(
+                lambda x: limit_up_count.get(x, 0)
+            )
+
+            return industry_stats
+
+        except Exception as e:
+            logger.error(f"获取行业数据失败: {e}")
+            return pd.DataFrame()
+
+    def fetch_macro_data(self, date: str) -> List[Dict]:
+        """
+        获取宏观数据
+
+        Args:
+            date: 日期
+
+        Returns:
+            宏观指标列表
+        """
+        results = []
+
+        try:
+            # PMI数据
+            try:
+                pmi_df = self._retry_fetch(ak.macro_china_pmi)
+                if pmi_df is not None and not pmi_df.empty:
+                    pmi_df['日期'] = pd.to_datetime(pmi_df['日期']).dt.strftime('%Y-%m')
+                    target_month = date[:7]  # YYYY-MM
+
+                    pmi_month = pmi_df[pmi_df['日期'] == target_month]
+                    if not pmi_month.empty:
+                        if '制造业-新订单' in pmi_month.columns:
+                            results.append({
+                                'date': date,
+                                'indicator': 'pmi_new_orders',
+                                'value': float(pmi_month['制造业-新订单'].values[0])
+                            })
+                        if '制造业-产成品库存' in pmi_month.columns:
+                            results.append({
+                                'date': date,
+                                'indicator': 'pmi_inventory',
+                                'value': float(pmi_month['制造业-产成品库存'].values[0])
+                            })
+            except Exception as e:
+                logger.warning(f"PMI数据获取失败: {e}")
+
+            # PPI数据
+            try:
+                ppi_df = self._retry_fetch(ak.macro_china_ppi)
+                if ppi_df is not None and not ppi_df.empty:
+                    ppi_df['日期'] = pd.to_datetime(ppi_df['日期']).dt.strftime('%Y-%m')
+                    target_month = date[:7]
+
+                    ppi_month = ppi_df[ppi_df['日期'] == target_month]
+                    if not ppi_month.empty and '同比' in ppi_month.columns:
+                        results.append({
+                            'date': date,
+                            'indicator': 'ppi_yoy',
+                            'value': float(ppi_month['同比'].values[0])
+                        })
+            except Exception as e:
+                logger.warning(f"PPI数据获取失败: {e}")
+
+            return results
+
+        except Exception as e:
+            logger.error(f"获取宏观数据失败: {e}")
+            return []
+
+    def save_to_parquet(self, table_name: str, df: pd.DataFrame):
+        """
+        保存时间序列数据到Parquet
+
+        Args:
+            table_name: 表名
+            df: DataFrame
+        """
+        try:
+            if df.empty:
+                return
+
+            parquet_file = Path(self.parquet_dir) / f"{table_name}.parquet"
+
+            # 如果文件存在，追加数据
+            if parquet_file.exists():
+                existing_df = pd.read_parquet(parquet_file)
+                # 合并并去重
+                df = pd.concat([existing_df, df], ignore_index=True)
+                df = df.drop_duplicates(subset=['date'] if 'date' in df.columns else None)
+
+            df.to_parquet(parquet_file, index=False)
+            logger.info(f"数据已保存到Parquet: {table_name}")
+
+        except Exception as e:
+            logger.error(f"保存Parquet失败: {e}")
+
     def save_to_db(self, table_name: str, data: Union[pd.DataFrame, Dict]):
         """
         保存数据到SQLite
@@ -457,6 +698,7 @@ class AkShareProvider:
             logger.info("获取指数数据...")
             indices = self.fetch_indices(date)
             self.save_to_db('indices', indices)
+            self.save_to_parquet('indices', indices)
 
             # 2. 成交额
             logger.info("获取成交额...")
@@ -472,6 +714,29 @@ class AkShareProvider:
             logger.info("获取北向资金...")
             northbound = self.fetch_northbound(date)
             self.save_to_db('northbound', northbound)
+
+            # 5. ETF流向
+            logger.info("获取ETF流向...")
+            etf_flows = self.fetch_etf_flows(date)
+            for flow in etf_flows:
+                self.save_to_db('etf_flows', flow)
+
+            # 6. 融资融券
+            logger.info("获取融资融券...")
+            margin = self.fetch_margin(date)
+            self.save_to_db('margin', margin)
+
+            # 7. 行业数据
+            logger.info("获取行业数据...")
+            industry = self.fetch_industry_data(date)
+            if not industry.empty:
+                self.save_to_db('industry', industry)
+
+            # 8. 宏观数据
+            logger.info("获取宏观数据...")
+            macro = self.fetch_macro_data(date)
+            for indicator in macro:
+                self.save_to_db('macro', indicator)
 
             logger.info(f"{date} 数据获取完成")
 
