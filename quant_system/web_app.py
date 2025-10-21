@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from main import QuantSystem
 from scripts.download_data import DataDownloader
+from data.storage import DataCacheManager
 
 # 页面配置
 st.set_page_config(
@@ -706,6 +707,25 @@ def main() -> None:
         st.markdown("---")
         st.markdown("### ⚙️ 设置")
 
+        cache_manager = DataCacheManager()
+        macro_ready = cache_manager.ensure_keys('macro_data', ['gdp', 'ppi', 'pmi', 'social_financing'])
+        market_ready = cache_manager.ensure_keys('market_data', ['hs300', 'sh000001'])
+
+        if macro_ready and market_ready:
+            st.success("已检测到真实宏观与市场数据缓存，刷新分析即可查看最新结果。")
+        else:
+            missing_parts = []
+            if not macro_ready:
+                missing_parts.append("宏观数据（GDP、PPI、PMI、社融）")
+            if not market_ready:
+                missing_parts.append("市场数据（沪深300、上证指数）")
+            missing_text = "；".join(missing_parts)
+            st.warning(
+                "当前缺少 "
+                f"{missing_text} 的真实缓存。点击下方“⬇️ 下载最新数据”按钮，或在终端执行 "
+                "`python scripts/download_data.py` 后重新进入页面。"
+            )
+
         if st.button("⬇️ 下载最新数据", use_container_width=True):
             with st.spinner("正在下载最新数据..."):
                 trigger_data_download(years=5)
@@ -729,6 +749,7 @@ def main() -> None:
         st.markdown("### 📚 快速链接")
         st.markdown("- [使用指南](README.md)")
         st.markdown("- [新手指南](新手使用指南.md)")
+        st.markdown("- [Mac一步步操作](Mac一步步操作指南.md)")
         st.markdown("- [GitHub](https://github.com/akfamily/akshare)")
 
         st.markdown("---")

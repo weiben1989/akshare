@@ -53,6 +53,9 @@ class QuantSystem:
         self.swensen_strategy = SwensenPortfolioStrategy(self.data_api, self.cache_manager)
         self.all_weather_strategy = AllWeatherPortfolioStrategy(self.data_api, self.cache_manager)
 
+        # 主动提示本地数据状态，帮助使用者确认是否已经替换为真实数据
+        self._log_cache_status_hint()
+
         self.logger.info("量化系统初始化完成")
 
     def analyze_market_cycle(self) -> Dict:
@@ -167,6 +170,38 @@ class QuantSystem:
         """获取朱格拉周期各指标的历史序列。"""
 
         return self.juglar_cycle.get_indicator_history()
+
+    # ------------------------------------------------------------------
+    # 内部工具
+    # ------------------------------------------------------------------
+    def _log_cache_status_hint(self) -> None:
+        """在初始化后输出关键数据集的可用性提示。"""
+
+        required_datasets = {
+            'macro_data': ['gdp', 'ppi', 'pmi', 'social_financing'],
+            'market_data': ['hs300', 'sh000001'],
+        }
+
+        missing = []
+        for dataset, keys in required_datasets.items():
+            if not self.cache_manager.ensure_keys(dataset, keys):
+                missing.append((dataset, keys))
+
+        if not missing:
+            self.logger.info("检测到本地缓存的宏观与市场数据均已就绪，将直接使用真实数据进行分析。")
+            return
+
+        missing_text = []
+        for dataset, keys in missing:
+            joined_keys = ", ".join(keys)
+            missing_text.append(f"{dataset} ({joined_keys})")
+
+        readable = "; ".join(missing_text)
+        self.logger.warning(
+            "当前缓存缺少以下真实数据: %s。请运行 `python scripts/download_data.py` "
+            "下载最新数据，或在 Web 页面点击“⬇️ 下载最新数据”按钮。下载成功后再运行本程序即可看到稳定的真实指标。",
+            readable,
+        )
 
     def generate_daily_report(self) -> str:
         """

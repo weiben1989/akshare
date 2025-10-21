@@ -90,6 +90,10 @@ class DataDownloader:
             'years': years
         })
 
+        print("下一步可执行：")
+        print("  • `python main.py` 生成报告并验证日志中是否提示已加载真实数据；")
+        print("  • 或 `streamlit run web_app.py`，在侧边栏看到绿色提示即代表缓存可用。\n")
+
     def _download_macro_data(self):
         """下载宏观数据"""
         macro_data = {}
