@@ -232,7 +232,7 @@ with st.sidebar:
 
     page = st.radio(
         "选择页面",
-        ["🏠 市场概览", "📈 周期分析", "💰 资产配置", "🔄 数据管理"],
+        ["🏠 市场概览", "📈 周期分析", "💰 资产配置", "🔍 日度复盘", "🔄 数据管理"],
         label_visibility="collapsed"
     )
 
@@ -930,6 +930,221 @@ elif page == "💰 资产配置":
         st.markdown("**历史业绩：**")
         for key, value in philosophy['历史业绩'].items():
             st.markdown(f"- {key}: {value}")
+
+elif page == "🔍 日度复盘":
+    # ==================== 页面4：日度复盘 ====================
+    import json
+    from datetime import date, timedelta
+    from pathlib import Path
+    import sys
+
+    # 添加review_engine到路径
+    review_engine_path = os.path.join(project_root, 'review_engine')
+    if review_engine_path not in sys.path:
+        sys.path.insert(0, review_engine_path)
+
+    try:
+        from run_daily import DailyReviewEngine
+        from integrations.deepseek import DeepSeekAnalyzer
+    except ImportError as e:
+        st.error(f"❌ 导入失败: {e}")
+        st.stop()
+
+    st.markdown('<h2 class="section-title">日度复盘</h2>', unsafe_allow_html=True)
+
+    # DeepSeek API 配置
+    st.markdown('<h3 class="subsection-title">⚙️ AI 解读配置（可选）</h3>', unsafe_allow_html=True)
+
+    with st.expander("🤖 DeepSeek API 设置", expanded=False):
+        st.markdown("""
+        <div style="color: #1d1d1f; background-color: #f5f5f7; padding: 15px; border-radius: 10px; margin-bottom: 10px;">
+            <p><strong>什么是 DeepSeek？</strong></p>
+            <p>DeepSeek 是一个 AI 模型，可以对复盘报告进行智能解读，提供更深入的市场分析和交易建议。</p>
+            <p><strong>如何获取 API Key？</strong></p>
+            <ol>
+                <li>访问 <a href="https://platform.deepseek.com" target="_blank" style="color: #0066cc;">https://platform.deepseek.com</a></li>
+                <li>注册账号并登录</li>
+                <li>在"API Keys"页面创建新的 API Key</li>
+                <li>将 API Key 粘贴到下方输入框</li>
+            </ol>
+            <p style="color: #ff3b30;"><strong>注意：</strong>不填写 API Key 也可以使用复盘功能，只是不会有 AI 解读部分。</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # API Key 输入
+        api_key = st.text_input(
+            "DeepSeek API Key",
+            type="password",
+            help="输入你的 DeepSeek API Key（可选）",
+            placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+        )
+
+        if api_key:
+            st.success("✅ API Key 已设置")
+        else:
+            st.info("ℹ️ 未设置 API Key，将使用默认分析")
+
+    st.markdown("---")
+
+    # 日期选择
+    st.markdown('<h3 class="subsection-title">📅 选择分析日期</h3>', unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([2, 2, 1])
+
+    with col1:
+        selected_date = st.date_input(
+            "日期",
+            value=date.today(),
+            max_value=date.today(),
+            help="选择要分析的日期"
+        )
+
+    with col2:
+        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+        st.markdown(f"<p style='color: #1d1d1f; font-size: 16px;'>已选择: <strong>{selected_date}</strong></p>", unsafe_allow_html=True)
+
+    with col3:
+        generate_btn = st.button("🚀 生成复盘", type="primary", use_container_width=True)
+
+    st.markdown("---")
+
+    # 生成复盘报告
+    if generate_btn:
+        date_str = selected_date.strftime('%Y-%m-%d')
+
+        with st.spinner('🔄 正在分析市场数据...'):
+            try:
+                # 创建复盘引擎
+                config_path = Path(review_engine_path) / 'config' / 'config.yaml'
+                engine = DailyReviewEngine(config_path)
+
+                # 运行复盘
+                st.info(f"📊 正在获取 {date_str} 的市场数据...")
+                result = engine.run(date=date_str, save_report=True)
+
+                # 获取报告
+                markdown_report = result['reports']['markdown']
+                json_report = result['reports']['json']
+
+                # 存储到 session_state
+                st.session_state['latest_report'] = {
+                    'date': date_str,
+                    'markdown': markdown_report,
+                    'json': json_report,
+                    'result': result
+                }
+
+                st.success(f"✅ 复盘报告生成成功！")
+
+            except Exception as e:
+                st.error(f"❌ 生成失败: {str(e)}")
+                st.exception(e)
+
+    # 显示报告
+    if 'latest_report' in st.session_state:
+        report = st.session_state['latest_report']
+
+        st.markdown('<h3 class="subsection-title">📊 复盘报告</h3>', unsafe_allow_html=True)
+
+        # 下载按钮
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.download_button(
+                label="📥 下载 Markdown 报告",
+                data=report['markdown'],
+                file_name=f"report_{report['date']}.md",
+                mime="text/markdown",
+                use_container_width=True
+            )
+
+        with col2:
+            st.download_button(
+                label="📥 下载 JSON 数据",
+                data=json.dumps(report['json'], ensure_ascii=False, indent=2),
+                file_name=f"report_{report['date']}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+
+        st.markdown("---")
+
+        # DeepSeek AI 解读（如果有 API Key）
+        if api_key:
+            st.markdown('<h3 class="subsection-title">🤖 AI 智能解读</h3>', unsafe_allow_html=True)
+
+            with st.spinner('🤔 AI 正在分析报告...'):
+                try:
+                    analyzer = DeepSeekAnalyzer(api_key=api_key)
+                    ai_analysis = analyzer.analyze_report(report['json'])
+
+                    # 显示 AI 分析
+                    st.markdown(f"""
+                    <div style="background-color: #f5f5f7; padding: 25px; border-radius: 15px; color: #1d1d1f;">
+                        <h4 style="color: #1d1d1f; margin-top: 0;">💡 一句话总结</h4>
+                        <p style="font-size: 18px; font-weight: 500; color: #1d1d1f;">{ai_analysis['summary']}</p>
+
+                        <h4 style="color: #1d1d1f; margin-top: 25px;">🎯 关键观察点</h4>
+                        <div style="color: #1d1d1f; line-height: 1.8;">
+                            {ai_analysis['key_points'].replace('\n', '<br>')}
+                        </div>
+
+                        <h4 style="color: #1d1d1f; margin-top: 25px;">📈 交易建议</h4>
+                        <div style="color: #1d1d1f; line-height: 1.8;">
+                            {ai_analysis['trading_advice'].replace('\n', '<br>')}
+                        </div>
+
+                        <h4 style="color: #1d1d1f; margin-top: 25px;">⚠️ 风险提示</h4>
+                        <div style="color: #1d1d1f; line-height: 1.8;">
+                            {ai_analysis['risk_warning'].replace('\n', '<br>')}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                except Exception as e:
+                    st.warning(f"⚠️ AI 解读失败: {str(e)}")
+                    st.info("💡 仍可查看下方的量化分析报告")
+
+            st.markdown("---")
+
+        # 显示 Markdown 报告（确保白底黑字）
+        st.markdown('<h3 class="subsection-title">📋 详细报告</h3>', unsafe_allow_html=True)
+
+        # 用白底黑字的样式包裹报告内容
+        st.markdown(f"""
+        <div style="background-color: #ffffff; color: #1d1d1f; padding: 30px; border-radius: 15px; border: 1px solid #d2d2d7;">
+            {report['markdown'].replace('\n', '<br>') if '<' not in report['markdown'] else report['markdown']}
+        </div>
+        """, unsafe_allow_html=True)
+
+    else:
+        # 提示用户生成报告
+        st.info("👆 请选择日期并点击「生成复盘」按钮")
+
+        # 显示功能说明
+        st.markdown("""
+        <div style="background-color: #f5f5f7; padding: 25px; border-radius: 15px; margin-top: 20px; color: #1d1d1f;">
+            <h4 style="color: #1d1d1f;">🎯 日度复盘功能</h4>
+            <p style="color: #1d1d1f;">基于真实市场数据的量化分析系统，提供：</p>
+            <ul style="color: #1d1d1f;">
+                <li>📊 市场表现：四大指数、市场宽度</li>
+                <li>🎯 四维度评分：宏观、流动性、风险偏好、动量</li>
+                <li>✅ 利好因素分析</li>
+                <li>⚠️ 利空因素分析</li>
+                <li>💡 投资建议：仓位配置、风格偏好、行业配置</li>
+                <li>🤖 AI 智能解读（需配置 DeepSeek API Key）</li>
+            </ul>
+
+            <h4 style="color: #1d1d1f; margin-top: 25px;">📋 使用步骤</h4>
+            <ol style="color: #1d1d1f;">
+                <li>（可选）在上方展开「DeepSeek API 设置」并输入 API Key</li>
+                <li>选择要分析的日期</li>
+                <li>点击「生成复盘」按钮</li>
+                <li>等待分析完成（约30秒-2分钟）</li>
+                <li>查看报告并下载</li>
+            </ol>
+        </div>
+        """, unsafe_allow_html=True)
 
 elif page == "🔄 数据管理":
     # ==================== 页面4：数据管理 ====================
