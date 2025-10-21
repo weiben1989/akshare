@@ -248,6 +248,17 @@ streamlit run web_app.py
 
 **会自动弹出浏览器**，访问：`http://localhost:8501`
 
+> ✅ **只要想确保100%真实数据**，可以在拉取更新后切到新的本地分支，并使用新的入口文件与端口：
+> ```bash
+> git fetch origin
+> git switch -c real-data-dashboard origin/work
+> streamlit run real_data_dashboard.py --server.port 8701
+> ```
+> - 8701 端口不会与旧版演示冲突；
+> - 页面会在展示前自动校验 `data/cache` 是否包含真实数据；
+> - 侧边栏提供“一键重新下载真实数据”按钮，方便你随时刷新。
+
+
 **如果没自动打开**，手动在浏览器输入：`http://localhost:8501`
 
 **你会看到**：
@@ -477,6 +488,17 @@ source ~/.zshrc
 - `quant`：进入项目目录
 - `quant-run`：运行报告
 - `quant-web`：启动Web
+
+---
+
+## 🆘 常见错误怎么处理？
+
+| 终端提示 | 解决办法 |
+| --- | --- |
+| `fatal: not a git repository (or any of the parent directories): .git` | 说明你还没有进入项目文件夹。运行 `cd ~/Documents/quant_workspace/akshare`（或你实际存放的位置），再继续执行后续命令。 |
+| `cd: quant_system: No such file or directory` | 需要先进入仓库根目录，再执行 `cd quant_system`。连续输入：`cd ~/Documents/quant_workspace/akshare` → `cd quant_system`。 |
+| `python3: command not found` | 还没有安装或配置好 Python，请返回到“安装必要工具”部分重新安装。 |
+| `ModuleNotFoundError: No module named 'pandas'` | 依赖没有安装或安装在其他环境，重新执行 `pip3 install ...` 这一步即可。 |
 
 ---
 

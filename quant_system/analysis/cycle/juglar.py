@@ -12,11 +12,11 @@ if project_root not in sys.path:
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from datetime import datetime
 
 from utils.logger import logger
-from utils.helpers import DataHelper
+from data.storage import DataCacheManager
 
 
 class JuglarCycle:
@@ -29,43 +29,57 @@ class JuglarCycle:
     - 信贷周期（领先指标）
     """
 
-    def __init__(self, data_fetcher=None):
+    def __init__(self, data_fetcher=None, cache_manager: Optional[DataCacheManager] = None):
         """
         Args:
             data_fetcher: 数据获取器实例
         """
         self.data_fetcher = data_fetcher
+        self.cache_manager = cache_manager
         self.logger = logger
 
         self.indicators = {
-            'capacity_utilization': [],  # 产能利用率
-            'fixed_investment': [],      # 固定资产投资
-            'ppi': [],                   # PPI
-            'roe': [],                   # 工业企业ROE
-            'credit_growth': []          # 信贷增速
+            'capacity_utilization': pd.Series(dtype=float),
+            'fixed_investment': pd.Series(dtype=float),
+            'ppi': pd.Series(dtype=float),
+            'roe': pd.Series(dtype=float),
+            'credit_growth': pd.Series(dtype=float)
         }
 
     def fetch_data(self) -> Dict:
         """获取周期判断所需数据"""
         try:
-            data = {
-                # 制造业固定资产投资完成额同比
-                'fixed_investment_growth': self._get_fixed_investment(),
+            pmi_df = self._load_macro_dataframe('pmi', 'get_macro_china_pmi')
+            ppi_df = self._load_macro_dataframe('ppi', 'get_macro_china_ppi')
+            gdp_df = self._load_macro_dataframe('gdp', 'get_macro_china_gdp')
+            m2_df = self._load_macro_dataframe('m2', 'get_macro_china_m2')
+            social_df = self._load_macro_dataframe('social_financing', 'get_macro_china_social_financing')
 
-                # PPI同比
-                'ppi_yoy': self._get_ppi_yoy(),
+            capacity_series = self._prepare_series(pmi_df, ['制造业-指数'])
+            investment_base = self._prepare_series(social_df, ['其中-企业债券', '其中-人民币贷款', '社会融资规模增量'])
+            investment_series = self._calc_growth_series(investment_base)
+            ppi_series = self._prepare_series(ppi_df, ['当月同比增长'])
+            roe_series = self._prepare_series(gdp_df, ['第二产业-同比增长', '国内生产总值-同比增长'])
+            credit_series = self._prepare_series(m2_df, ['货币和准货币(M2)-同比增长'])
 
-                # 工业企业ROE（利润总额/净资产）
-                'industrial_roe': self._get_industrial_roe(),
-
-                # 社融/M2增速
-                'credit_growth': self._get_credit_growth(),
-
-                # 产能利用率
-                'capacity_utilization': self._get_capacity_utilization()
+            self.indicators = {
+                'capacity_utilization': capacity_series,
+                'fixed_investment': investment_series,
+                'ppi': ppi_series,
+                'roe': roe_series,
+                'credit_growth': credit_series
             }
 
-            self.logger.info("朱格拉周期数据获取成功")
+            data = {
+                'timestamp': self._infer_latest_period([pmi_df, social_df, gdp_df, m2_df]),
+                'fixed_investment_growth': self._latest_non_null(investment_series),
+                'ppi_yoy': self._latest_non_null(ppi_series),
+                'industrial_roe': self._latest_non_null(roe_series),
+                'credit_growth': self._latest_non_null(credit_series),
+                'capacity_utilization': self._latest_non_null(capacity_series)
+            }
+
+            self.logger.info("朱格拉周期数据获取成功（使用真实宏观数据）")
             return data
 
         except Exception as e:
@@ -87,16 +101,11 @@ class JuglarCycle:
         """
         data = self.fetch_data()
 
-        # 方法1：产能利用率 + 固定资产投资方向
-        capacity_trend = self._calc_trend(data.get('capacity_utilization', 75))
-        investment_trend = self._calc_trend(data.get('fixed_investment_growth', 0))
-
-        # 方法2：PPI + ROE双轮驱动
-        ppi_level = self._get_percentile(data.get('ppi_yoy', 0))
-        roe_trend = self._calc_trend(data.get('industrial_roe', 10))
-
-        # 方法3：信贷周期（领先指标，领先9-12个月）
-        credit_trend = self._calc_trend(data.get('credit_growth', 10))
+        capacity_trend = self._calc_trend(self.indicators.get('capacity_utilization'))
+        investment_trend = self._calc_trend(self.indicators.get('fixed_investment'))
+        ppi_level = self._get_percentile(data.get('ppi_yoy', 0), self.indicators.get('ppi'))
+        roe_trend = self._calc_trend(self.indicators.get('roe'))
+        credit_trend = self._calc_trend(self.indicators.get('credit_growth'), short=3, long=12)
 
         # 综合判断
         phase = self._综合判断phase(
@@ -110,7 +119,7 @@ class JuglarCycle:
         result = {
             'phase': phase,
             'phase_name': ['复苏', '繁荣', '衰退', '萧条'][phase - 1],
-            'confidence': self._calc_confidence(capacity_trend, investment_trend),
+            'confidence': self._calc_confidence(capacity_trend, investment_trend, roe_trend, credit_trend),
             'time_in_phase': self._estimate_phase_duration(phase),
             'next_inflection': self._predict_inflection_point(phase),
             'indicators': {
@@ -119,7 +128,8 @@ class JuglarCycle:
                 'ppi_level': ppi_level,
                 'roe_trend': roe_trend,
                 'credit_trend': credit_trend
-            }
+            },
+            'timestamp': data.get('timestamp')
         }
 
         self.logger.info(f"朱格拉周期识别完成: {result['phase_name']} (置信度: {result['confidence']:.1%})")
@@ -208,50 +218,124 @@ class JuglarCycle:
 
         return allocation_adj.get(phase, allocation_adj[2])
 
+    def get_indicator_history(self) -> Dict[str, pd.Series]:
+        """返回用于可视化的指标历史。"""
+
+        history = {}
+        for key, series in self.indicators.items():
+            if isinstance(series, pd.Series):
+                history[key] = series.copy()
+            else:
+                history[key] = pd.Series(series)
+        return history
+
     # ==================== 私有方法 ====================
 
-    def _get_fixed_investment(self) -> float:
-        """获取固定资产投资增速（模拟）"""
-        return np.random.uniform(-2, 10)
+    def _load_macro_dataframe(self, key: str, fetcher: str) -> pd.DataFrame:
+        df = pd.DataFrame()
+        if self.cache_manager:
+            df = self.cache_manager.get_dataframe('macro_data', key)
+        if (df is None or df.empty) and self.data_fetcher:
+            fetch_func = getattr(self.data_fetcher, fetcher, None)
+            if callable(fetch_func):
+                df = fetch_func()
+                if self.cache_manager and isinstance(df, pd.DataFrame) and not df.empty:
+                    data = self.cache_manager.load_dataset('macro_data') or {}
+                    data[key] = df
+                    self.cache_manager.save_dataset('macro_data', data)
+        if df is None:
+            df = pd.DataFrame()
+        return self._sort_dataframe(df)
 
-    def _get_ppi_yoy(self) -> float:
-        """获取PPI同比（模拟）"""
-        return np.random.uniform(-3, 8)
+    def _sort_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
 
-    def _get_industrial_roe(self) -> float:
-        """获取工业企业ROE（模拟）"""
-        return np.random.uniform(5, 15)
+        candidates = ['日期', 'date', '月份', '季度', '时间', '统计期', 'period', 'TRADE_DATE', '交易日']
+        for column in candidates:
+            if column in df.columns:
+                sort_key = df[column]
+                try:
+                    parsed = pd.to_datetime(sort_key, errors='coerce')
+                    if parsed.notna().sum() >= max(1, len(parsed) // 2):
+                        sort_key = parsed
+                except Exception:
+                    pass
+                df = df.assign(_sort_key=sort_key).sort_values('_sort_key').drop(columns=['_sort_key'])
+                break
 
-    def _get_credit_growth(self) -> float:
-        """获取信贷增速（模拟）"""
-        return np.random.uniform(8, 15)
+        return df.reset_index(drop=True)
 
-    def _get_capacity_utilization(self) -> float:
-        """获取产能利用率（模拟）"""
-        return np.random.uniform(70, 85)
+    def _prepare_series(self, df: pd.DataFrame, candidates: List[str]) -> pd.Series:
+        if df is None or df.empty:
+            return pd.Series(dtype=float)
 
-    def _calc_trend(self, current_value: float) -> float:
-        """
-        计算趋势方向
+        for column in candidates:
+            if column in df.columns:
+                series = pd.to_numeric(df[column], errors='coerce').dropna()
+                if not series.empty:
+                    return series.reset_index(drop=True)
+        return pd.Series(dtype=float)
 
-        Args:
-            current_value: 当前值
+    def _calc_growth_series(self, series: pd.Series, periods: int = 12) -> pd.Series:
+        if series is None or series.empty:
+            return pd.Series(dtype=float)
 
-        Returns:
-            趋势值 (-1到1)
-        """
-        # 简化版本：基于阈值判断
-        # 实际应用中应该计算移动平均线斜率
-        if current_value > 80 or current_value > 10:  # 高位
-            return 0.5
-        elif current_value < 70 or current_value < 5:  # 低位
-            return -0.5
+        if len(series) > periods:
+            growth = series.pct_change(periods=periods) * 100
         else:
+            growth = series.pct_change() * 100
+        return growth.dropna()
+
+    def _latest_non_null(self, series: pd.Series) -> float:
+        if series is None or series.empty:
+            return 0.0
+        value = series.dropna()
+        if value.empty:
+            return 0.0
+        return float(np.nan_to_num(value.iloc[-1], nan=0.0))
+
+    def _infer_latest_period(self, dfs: list[pd.DataFrame]) -> str:
+        for df in dfs:
+            if df is None or df.empty:
+                continue
+            for column in ['日期', 'date', '月份', '季度', '时间', '统计期', 'period', 'TRADE_DATE', '交易日']:
+                if column in df.columns:
+                    value = df[column].dropna().iloc[-1]
+                    return str(value)
+        return datetime.now().strftime('%Y-%m-%d')
+
+    def _calc_trend(self, series: Optional[pd.Series], short: int = 3, long: int = 9) -> float:
+        if series is None or series.empty:
             return 0.0
 
-    def _get_percentile(self, value: float) -> float:
-        """获取历史分位数（模拟）"""
-        return np.random.uniform(0, 100)
+        clean = series.dropna()
+        if clean.empty:
+            return 0.0
+
+        short_window = min(short, len(clean))
+        long_window = min(long, len(clean))
+
+        short_ma = clean.tail(short_window).mean()
+        long_ma = clean.tail(long_window).mean()
+
+        if long_ma == 0 or np.isnan(short_ma) or np.isnan(long_ma):
+            return 0.0
+
+        slope = (short_ma - long_ma) / abs(long_ma)
+        return float(np.clip(slope, -1.0, 1.0))
+
+    def _get_percentile(self, value: float, series: Optional[pd.Series]) -> float:
+        if series is None or series.empty:
+            return 50.0
+
+        clean = series.dropna()
+        if clean.empty:
+            return 50.0
+
+        arr = clean.values
+        percentile = np.sum(arr <= value) / len(arr) * 100
+        return float(np.clip(percentile, 0, 100))
 
     def _综合判断phase(self, capacity_trend: float, investment_trend: float,
                       ppi_level: float, roe_trend: float, credit_trend: float) -> int:
@@ -299,21 +383,54 @@ class JuglarCycle:
         else:
             return 4  # 萧条期
 
-    def _calc_confidence(self, capacity_trend: float, investment_trend: float) -> float:
+    def _calc_confidence(self, capacity_trend: float, investment_trend: float,
+                         roe_trend: float, credit_trend: float) -> float:
         """计算判断置信度"""
-        # 信号一致性越高，置信度越高
-        if capacity_trend * investment_trend > 0:  # 同向
-            return 0.8
-        else:
-            return 0.5
+
+        signals = [abs(capacity_trend), abs(investment_trend), abs(roe_trend), abs(credit_trend)]
+        valid = [s for s in signals if not np.isnan(s)]
+        base = np.mean(valid) if valid else 0.3
+        base = np.clip(base, 0.1, 1.0)
+
+        alignment = 1.0 if capacity_trend * investment_trend >= 0 else 0.7
+        credit_factor = 1.0 - min(abs(credit_trend), 1.0) * 0.2
+
+        confidence = base * alignment * credit_factor + 0.2
+        return float(np.clip(confidence, 0.2, 0.95))
 
     def _estimate_phase_duration(self, phase: int) -> int:
         """估计当前阶段已持续时间（月）"""
-        # 模拟数据
-        return np.random.randint(6, 36)
+
+        series = self.indicators.get('capacity_utilization')
+        if series is None or len(series) < 2:
+            return 12
+
+        diff = series.diff().dropna()
+        if diff.empty:
+            return min(len(series), 12)
+
+        last_sign = np.sign(diff.iloc[-1])
+        if last_sign == 0:
+            return 6
+
+        streak = 1
+        for val in reversed(diff.iloc[:-1]):
+            if np.sign(val) == last_sign:
+                streak += 1
+            else:
+                break
+
+        return int(max(3, min(streak, 36)))
 
     def _predict_inflection_point(self, phase: int) -> str:
         """预测下一个拐点时间"""
-        # 简化版本
-        months = np.random.randint(3, 18)
-        return f"预计{months}个月后进入下一阶段"
+
+        avg_duration = {
+            1: 24,
+            2: 36,
+            3: 18,
+            4: 12
+        }
+        elapsed = self._estimate_phase_duration(phase)
+        remaining = max(avg_duration.get(phase, 24) - elapsed, 3)
+        return f"预计{remaining}个月后进入下一阶段"

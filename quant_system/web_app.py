@@ -1,465 +1,795 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-A股量化系统 - Web可视化界面
-使用Streamlit构建交互式Dashboard
-"""
+"""使用Streamlit构建交互式Dashboard。"""
 
-import streamlit as st
+from __future__ import annotations
+
+import math
+import os
+import sys
+from datetime import datetime
+from typing import Any, Dict, Optional
+
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
-import sys
-import os
+import streamlit as st
 
-# 添加路径
+# 添加路径，便于在命令行直接运行该文件
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from main import QuantSystem
-from analysis.cycle.kitchin import KitchinCycle
-from analysis.cycle.juglar import JuglarCycle
-from analysis.cycle.marks_pendulum import MarksPendulum
+from scripts.download_data import DataDownloader
+from data.storage import DataCacheManager
 
 # 页面配置
 st.set_page_config(
     page_title="A股量化分析系统",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 # 自定义CSS
-st.markdown("""
+st.markdown(
+    """
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
+    :root {
+        color-scheme: light;
+    }
+    body {
+        background-color: #f5f5f7;
+        font-family: 'SF Pro Display', 'Helvetica Neue', sans-serif;
+        color: #1d1d1f;
+    }
+    .stApp {
+        background: radial-gradient(circle at top, rgba(255,255,255,0.92), rgba(245,245,247,0.95));
+    }
+    .apple-header {
         text-align: center;
-        margin-bottom: 2rem;
+        padding: 2.5rem 1rem 1.5rem 1rem;
+        color: #1d1d1f;
     }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
+    .apple-header h1 {
+        font-size: 2.6rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
     }
-    .cycle-indicator {
-        font-size: 1.2rem;
-        font-weight: bold;
-        padding: 0.5rem;
-        border-radius: 0.3rem;
-        text-align: center;
+    .apple-subtitle {
+        color: #6e6e73;
+        font-size: 1rem;
     }
-    .bullish {
-        background-color: #d4edda;
-        color: #155724;
+    .header-tags {
+        margin-top: 1rem;
     }
-    .bearish {
-        background-color: #f8d7da;
-        color: #721c24;
+    .apple-card {
+        background: rgba(255, 255, 255, 0.82);
+        border-radius: 24px;
+        padding: 1.8rem 1.6rem;
+        box-shadow: 0 18px 32px rgba(31, 41, 55, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        backdrop-filter: blur(20px);
+        margin-bottom: 1.5rem;
     }
-    .neutral {
-        background-color: #fff3cd;
-        color: #856404;
+    .apple-metric-value {
+        font-size: 1.35rem;
+        font-weight: 600;
+        color: #1d1d1f;
+    }
+    .apple-metric-label {
+        font-size: 0.82rem;
+        color: #6e6e73;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+    }
+    .chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.35rem 0.85rem;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .chip.green {
+        background: rgba(52, 199, 89, 0.18);
+        color: #1d7f3b;
+    }
+    .chip.red {
+        background: rgba(255, 59, 48, 0.18);
+        color: #b0281a;
+    }
+    .chip.yellow {
+        background: rgba(255, 204, 0, 0.22);
+        color: #8f6b00;
+    }
+    .chip.neutral {
+        background: rgba(142, 142, 147, 0.18);
+        color: #1d1d1f;
+    }
+    .apple-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1rem;
+        font-size: 0.9rem;
+    }
+    .apple-table th,
+    .apple-table td {
+        padding: 0.35rem 0.2rem;
+        border-bottom: 1px solid rgba(60, 60, 67, 0.12);
+        text-align: left;
+    }
+    .apple-table th {
+        font-weight: 600;
+        color: #3a3a3c;
     }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 @st.cache_resource
-def init_system():
-    """初始化系统（缓存）"""
+def init_system() -> QuantSystem:
+    """初始化系统（缓存资源）"""
+
     return QuantSystem()
 
 
-@st.cache_data(ttl=3600)  # 缓存1小时
-def get_market_analysis():
-    """获取市场分析（缓存）"""
+@st.cache_data(ttl=3600)
+def get_market_analysis_data() -> Dict[str, Any]:
+    """获取市场分析（缓存1小时）"""
+
     system = init_system()
     return system.analyze_market_cycle()
 
 
 @st.cache_data(ttl=3600)
-def get_investment_advice():
-    """获取投资建议（缓存）"""
+def get_investment_advice_data() -> Dict[str, Any]:
+    """获取投资建议（缓存1小时）"""
+
     system = init_system()
     return system.get_investment_advice()
 
 
-def render_header():
-    """渲染页面头部"""
-    st.markdown('<div class="main-header">📊 A股量化分析系统</div>', unsafe_allow_html=True)
-    st.markdown(f"**更新时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    st.markdown("---")
+@st.cache_data(ttl=3600)
+def get_strategy_data() -> Dict[str, Dict[str, Any]]:
+    """获取资产配置策略结果"""
+
+    system = init_system()
+    return system.get_allocation_strategies()
 
 
-def render_cycle_dashboard(cycle_analysis):
-    """渲染周期分析仪表盘"""
-    st.header("🔄 市场周期分析")
+@st.cache_data(ttl=3600)
+def get_cycle_history_data() -> Dict[str, pd.DataFrame]:
+    """获取周期相关历史数据"""
+
+    system = init_system()
+    return system.get_cycle_history()
+
+
+@st.cache_data(ttl=3600)
+def get_juglar_indicator_data() -> Dict[str, pd.Series]:
+    """获取朱格拉周期指标历史"""
+
+    system = init_system()
+    return system.get_juglar_indicators()
+
+
+@st.cache_data(ttl=3600)
+def get_daily_report() -> str:
+    """获取缓存的每日报告"""
+
+    system = init_system()
+    return system.generate_daily_report()
+
+
+# ---------------------------------------------------------------------------
+# 辅助函数
+# ---------------------------------------------------------------------------
+
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def format_number(value: Any, decimals: int = 1, show_sign: bool = True) -> str:
+    number = _to_float(value)
+    if number is None or math.isnan(number):
+        return "--"
+
+    fmt = f"{{:+.{decimals}f}}" if show_sign else f"{{:.{decimals}f}}"
+    return fmt.format(number)
+
+
+def format_percentage(
+    value: Any,
+    decimals: int = 1,
+    *,
+    is_ratio: bool = True,
+    show_sign: bool = False,
+) -> str:
+    number = _to_float(value)
+    if number is None or math.isnan(number):
+        return "--"
+
+    if is_ratio:
+        number *= 100
+
+    fmt = f"{{:+.{decimals}f}}%" if show_sign else f"{{:.{decimals}f}}%"
+    return fmt.format(number)
+
+
+def get_phase_color(phase: Optional[int]) -> str:
+    mapping = {
+        1: "green",
+        2: "green",
+        3: "yellow",
+        4: "red",
+    }
+    return mapping.get(phase, "neutral")
+
+
+def get_temperature_color(score: Optional[float]) -> str:
+    value = _to_float(score)
+    if value is None:
+        return "neutral"
+    if value < 30:
+        return "green"
+    if value < 70:
+        return "yellow"
+    return "red"
+
+
+def get_signal_color(signal: str) -> str:
+    signal = (signal or "").upper()
+    if "BUY" in signal:
+        return "green"
+    if signal in {"DEFENSIVE", "NEUTRAL"}:
+        return "yellow"
+    if any(word in signal for word in ["REDUCE", "SELL", "RISK"]):
+        return "red"
+    return "neutral"
+
+
+# ---------------------------------------------------------------------------
+# 渲染函数
+# ---------------------------------------------------------------------------
+
+def render_header(cycle_analysis: Dict[str, Any]) -> None:
+    updated_at = cycle_analysis.get("date", datetime.now().strftime("%Y-%m-%d"))
+    kitchin = cycle_analysis.get("kitchin", {})
+    juglar = cycle_analysis.get("juglar", {})
+    pendulum = cycle_analysis.get("pendulum", {})
+
+    st.markdown(
+        f"""
+        <div class="apple-header">
+            <h1>📈 市场节奏与资产配置</h1>
+            <div class="apple-subtitle">基于真实宏观与行情数据的多周期分析面板</div>
+            <div style="margin-top:0.6rem;color:#86868b;font-size:0.9rem;">数据刷新时间：{updated_at}</div>
+            <div class="header-tags">
+                <span class="chip {get_phase_color(kitchin.get('phase'))}">基钦周期：{kitchin.get('phase_name', '--')}</span>
+                <span class="chip {get_phase_color(juglar.get('phase'))}">朱格拉周期：{juglar.get('phase_name', '--')}</span>
+                <span class="chip {get_temperature_color(pendulum.get('total_score'))}">情绪温度：{pendulum.get('level', '--')}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_cycle_dashboard(cycle_analysis: Dict[str, Any]) -> None:
+    st.markdown("### 🔄 周期与情绪速览")
 
     col1, col2, col3 = st.columns(3)
 
-    # 基钦周期
+    kitchin = cycle_analysis["kitchin"]
+    juglar = cycle_analysis["juglar"]
+    pendulum = cycle_analysis["pendulum"]
+
     with col1:
-        kitchin = cycle_analysis['kitchin']
-        phase_color = get_phase_color(kitchin['phase'])
+        st.markdown(
+            f"""
+            <div class="apple-card">
+                <div class="apple-metric-label">库存周期 · 基钦</div>
+                <div class="apple-metric-value" style="margin-bottom:0.6rem;">{kitchin['phase_name']}</div>
+                <div class="chip {get_phase_color(kitchin['phase'])}">阶段进度 {format_percentage(kitchin['progress'])}</div>
+                <div style="margin-top:0.8rem; font-size:0.95rem; color:#3a3a3c;">
+                    需求增速：{format_number(kitchin['demand_growth'])}%<br/>
+                    库存增速：{format_number(kitchin['inventory_growth'])}%<br/>
+                    判断置信度：{format_percentage(kitchin['confidence'])}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        st.markdown(f"""
-        <div class="cycle-indicator {phase_color}">
-            基钦周期（库存周期）<br>
-            {kitchin['phase_name']}
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.metric("阶段进度", f"{kitchin['progress']:.1%}")
-        st.metric("需求增速", f"{kitchin['demand_growth']:.2f}%")
-        st.metric("库存增速", f"{kitchin['inventory_growth']:.2f}%")
-        st.metric("置信度", f"{kitchin['confidence']:.1%}")
-
-    # 朱格拉周期
     with col2:
-        juglar = cycle_analysis['juglar']
-        phase_color = get_phase_color(juglar['phase'])
+        st.markdown(
+            f"""
+            <div class="apple-card">
+                <div class="apple-metric-label">产能周期 · 朱格拉</div>
+                <div class="apple-metric-value" style="margin-bottom:0.6rem;">{juglar['phase_name']}</div>
+                <div class="chip {get_phase_color(juglar['phase'])}">信号强度 {format_percentage(juglar['confidence'])}</div>
+                <div style="margin-top:0.8rem; font-size:0.95rem; color:#3a3a3c;">
+                    阶段已持续：约 {juglar['time_in_phase']} 个月<br/>
+                    下个拐点：{juglar['next_inflection']}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        st.markdown(f"""
-        <div class="cycle-indicator {phase_color}">
-            朱格拉周期（产能周期）<br>
-            {juglar['phase_name']}
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.metric("置信度", f"{juglar['confidence']:.1%}")
-        st.info(juglar['next_inflection'])
-
-    # 马克斯钟摆
     with col3:
-        pendulum = cycle_analysis['pendulum']
-        temp_color = get_temperature_color(pendulum['total_score'])
-
-        st.markdown(f"""
-        <div class="cycle-indicator {temp_color}">
-            市场情绪温度<br>
-            {pendulum['total_score']:.1f}/100
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown(f"**状态**: {pendulum['level']}")
-        st.metric("估值", f"{pendulum['valuation']:.1f}")
-        st.metric("情绪", f"{pendulum['sentiment']:.1f}")
-        st.metric("流动性", f"{pendulum['liquidity']:.1f}")
-        st.metric("市场宽度", f"{pendulum['breadth']:.1f}")
-
-
-def render_investment_advice(advice):
-    """渲染投资建议"""
-    st.header("💡 投资建议")
-
-    col1, col2 = st.columns([1, 2])
-
-    with col1:
-        st.subheader("核心建议")
-
-        # 建议仓位
-        position = advice['recommended_position']
-        st.metric("建议仓位", f"{position:.1%}", delta=None)
-
-        # 进度条
-        st.progress(position)
-
-        # 择时信号
-        signal_color = {
-            'STRONG_BUY': '🟢',
-            'BUY': '🟢',
-            'HOLD': '🟡',
-            'REDUCE': '🟠',
-            'DEFENSIVE': '🔴'
-        }
-        signal = advice['timing_signal']
-        st.markdown(f"**择时信号**: {signal_color.get(signal, '⚪')} {signal}")
-
-        # 情绪策略
-        st.markdown(f"**情绪策略**: {advice['sentiment_action']}")
-
-        # 风险等级
-        st.markdown(f"**风险等级**: {advice['risk_level']}")
-
-    with col2:
-        st.subheader("行业配置建议")
-
-        # 创建行业配置表格
-        sector_rec = advice['sector_advice']['combined_recommendation']
-
-        sectors_df = pd.DataFrame({
-            '配置建议': ['超配'] * len(sector_rec['overweight'][:5]) +
-                       ['标配'] * len(sector_rec['neutral'][:3]) +
-                       ['低配'] * len(sector_rec['underweight'][:3]),
-            '行业': sector_rec['overweight'][:5] +
-                   sector_rec['neutral'][:3] +
-                   sector_rec['underweight'][:3]
-        })
-
-        # 显示表格
-        st.dataframe(
-            sectors_df,
-            use_container_width=True,
-            hide_index=True
+        st.markdown(
+            f"""
+            <div class="apple-card">
+                <div class="apple-metric-label">市场情绪 · 马克斯钟摆</div>
+                <div class="apple-metric-value" style="margin-bottom:0.6rem;">{pendulum['total_score']:.1f} / 100</div>
+                <div class="chip {get_temperature_color(pendulum['total_score'])}">{pendulum['level']}</div>
+                <div style="margin-top:0.8rem; font-size:0.95rem; color:#3a3a3c;">
+                    估值温度：{format_number(pendulum['valuation'], show_sign=False)}<br/>
+                    情绪分项：{format_number(pendulum['sentiment'], show_sign=False)}<br/>
+                    流动性：{format_number(pendulum['liquidity'], show_sign=False)}<br/>
+                    市场宽度：{format_number(pendulum['breadth'], show_sign=False)}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
 
-def render_key_points(advice):
-    """渲染关键要点"""
-    st.header("📌 关键要点")
+def render_strategy_section(strategies: Dict[str, Dict[str, Any]]) -> None:
+    if not strategies:
+        return
 
-    for i, point in enumerate(advice['key_points'], 1):
-        st.markdown(f"{i}. {point}")
+    st.markdown("### 🧭 经典资产配置策略")
+    cols = st.columns(len(strategies))
+
+    display_names = {
+        "swensen": "斯文森捐赠组合",
+        "all_weather": "全天候资产配置",
+    }
+
+    for col, (key, payload) in zip(cols, strategies.items()):
+        name = payload.get("name", display_names.get(key, key.title()))
+        portfolio = payload.get("portfolio", {})
+        weights = payload.get("weights", {})
+        notes = payload.get("notes", [])
+
+        weights_rows = "".join(
+            f"<tr><td>{asset}</td><td>{format_percentage(weight)}</td></tr>" for asset, weight in weights.items()
+        )
+        notes_rows = "".join(f"<li>{note}</li>" for note in notes)
+
+        col.markdown(
+            f"""
+            <div class="apple-card">
+                <div class="apple-metric-label">{name}</div>
+                <div style="margin-top:0.6rem; font-size:0.95rem; color:#3a3a3c;">
+                    预期年化收益：{format_percentage(portfolio.get('annual_return'))}<br/>
+                    组合波动率：{format_percentage(portfolio.get('annual_volatility'))}<br/>
+                    最大回撤：{format_percentage(portfolio.get('max_drawdown'), show_sign=True)}
+                </div>
+                <table class="apple-table">
+                    <thead><tr><th>资产</th><th>目标权重</th></tr></thead>
+                    <tbody>{weights_rows}</tbody>
+                </table>
+                <div style="margin-top:1rem; font-size:0.85rem; color:#6e6e73;">
+                    <ul style="padding-left:1.2rem; margin:0;">{notes_rows}</ul>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
-def render_charts():
-    """渲染图表"""
-    st.header("📈 数据可视化")
+def render_investment_advice(advice: Dict[str, Any], strategies: Dict[str, Dict[str, Any]]) -> None:
+    st.markdown("### 💡 当期配置建议")
 
-    tab1, tab2, tab3 = st.tabs(["周期趋势", "情绪温度", "行业轮动"])
+    col1, col2 = st.columns([1.1, 1.5])
 
-    with tab1:
-        render_cycle_trend_chart()
+    with col1:
+        st.markdown(
+            f"""
+            <div class="apple-card">
+                <div class="apple-metric-label">综合仓位建议</div>
+                <div class="apple-metric-value">{format_percentage(advice['recommended_position'])}</div>
+                <div style="margin:1rem 0 0.5rem 0;">
+                    <div class="chip {get_signal_color(advice['timing_signal'])}">择时信号：{advice['timing_signal']}</div>
+                </div>
+                <div style="color:#3a3a3c; font-size:0.95rem;">
+                    情绪策略：{advice['sentiment_action']}<br/>
+                    风险等级：{advice['risk_level']}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    with tab2:
-        render_sentiment_chart()
+    with col2:
+        sector_rec = advice['sector_advice']['combined_recommendation']
+        overweight = sector_rec.get('overweight', [])[:5]
+        neutral = sector_rec.get('neutral', [])[:4]
+        underweight = sector_rec.get('underweight', [])[:4]
+        sectors_df = pd.DataFrame(
+            {
+                '配置': ['超配'] * len(overweight) + ['标配'] * len(neutral) + ['低配'] * len(underweight),
+                '行业': overweight + neutral + underweight,
+            }
+        )
 
-    with tab3:
-        render_sector_rotation_chart()
+        st.markdown("<div class='apple-card'><div class='apple-metric-label'>行业配置偏好</div>", unsafe_allow_html=True)
+        if sectors_df.empty:
+            st.caption("暂无行业配置建议，请刷新数据。")
+        else:
+            st.dataframe(sectors_df, use_container_width=True, hide_index=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    render_strategy_section(strategies)
 
 
-def render_cycle_trend_chart():
-    """渲染周期趋势图"""
-    # 模拟历史数据
-    dates = pd.date_range(end=datetime.now(), periods=100, freq='D')
-    kitchin_phases = np.random.choice([1, 2, 3, 4], 100)
-    sentiment_scores = np.random.uniform(20, 80, 100)
+def render_key_points(advice: Dict[str, Any]) -> None:
+    st.markdown("### 📌 关键要点")
+    points = advice.get('key_points', [])
+    items = "".join(f"<li>{point}</li>" for point in points)
+    if not items:
+        items = "<li>暂无结论，请稍后重试。</li>"
+
+    st.markdown(
+        f"""
+        <div class="apple-card" style="padding:1.4rem 1.6rem;">
+            <ul style="margin:0; padding-left:1.2rem; color:#3a3a3c; font-size:0.95rem;">{items}</ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_cycle_trend_chart(
+    cycle_history: Dict[str, pd.DataFrame],
+    juglar_history: Dict[str, pd.Series],
+) -> None:
+    kitchin_df = cycle_history.get('kitchin', pd.DataFrame()).copy()
+    pendulum_df = cycle_history.get('pendulum', pd.DataFrame()).copy()
+
+    if not kitchin_df.empty:
+        if 'date' in kitchin_df.columns:
+            kitchin_df['date'] = pd.to_datetime(kitchin_df['date'], errors='coerce')
+        else:
+            kitchin_df['date'] = pd.to_datetime(kitchin_df.get('period'), errors='coerce')
+        kitchin_df = kitchin_df.dropna(subset=['date']).sort_values('date')
+        kitchin_df['inventory_growth'] = pd.to_numeric(kitchin_df['inventory_growth'], errors='coerce')
+        kitchin_df['demand_growth'] = pd.to_numeric(kitchin_df['demand_growth'], errors='coerce')
+    if not pendulum_df.empty:
+        pendulum_df['timestamp'] = pd.to_datetime(pendulum_df['timestamp'], errors='coerce')
+        pendulum_df = pendulum_df.dropna(subset=['timestamp']).sort_values('timestamp')
+        pendulum_df['total_score'] = pd.to_numeric(pendulum_df['total_score'], errors='coerce')
+
+    juglar_frames: Dict[str, pd.Series] = {}
+    for key, series in juglar_history.items():
+        if isinstance(series, pd.Series) and not series.empty:
+            cleaned = pd.to_numeric(series, errors='coerce')
+            cleaned.index = pd.to_datetime(series.index, errors='coerce')
+            cleaned = cleaned.dropna()
+            if not cleaned.empty:
+                juglar_frames[key] = cleaned.sort_index()
+
+    juglar_df = pd.DataFrame(juglar_frames) if juglar_frames else pd.DataFrame()
+    if not juglar_df.empty:
+        juglar_df = juglar_df.dropna(how='all').sort_index()
+
+    if kitchin_df.empty and pendulum_df.empty and juglar_df.empty:
+        st.info("暂无可视化数据，请先刷新或下载最新数据。")
+        return
 
     fig = make_subplots(
-        rows=2, cols=1,
-        subplot_titles=("基钦周期阶段", "市场情绪温度"),
-        vertical_spacing=0.15
+        rows=3,
+        cols=1,
+        specs=[[{"secondary_y": True}], [{}], [{}]],
+        subplot_titles=("库存周期：需求 vs 库存增速", "朱格拉关键指标", "市场情绪温度"),
+        vertical_spacing=0.12,
     )
 
-    # 基钦周期
-    fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=kitchin_phases,
-            mode='lines+markers',
-            name='基钦周期',
-            line=dict(color='blue', width=2)
-        ),
-        row=1, col=1
-    )
+    if not kitchin_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=kitchin_df['date'],
+                y=kitchin_df['inventory_growth'],
+                name='库存增速',
+                mode='lines',
+                line=dict(color='#0a84ff', width=2),
+            ),
+            row=1,
+            col=1,
+            secondary_y=False,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=kitchin_df['date'],
+                y=kitchin_df['demand_growth'],
+                name='需求增速',
+                mode='lines',
+                line=dict(color='#34c759', width=2),
+            ),
+            row=1,
+            col=1,
+            secondary_y=False,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=kitchin_df['date'],
+                y=kitchin_df['phase'],
+                name='阶段',
+                mode='lines',
+                line=dict(color='#ff9f0a', width=1.4, dash='dot', shape='hv'),
+            ),
+            row=1,
+            col=1,
+            secondary_y=True,
+        )
+        fig.update_yaxes(title_text='增速 (%)', row=1, col=1, secondary_y=False)
+        fig.update_yaxes(
+            title_text='阶段',
+            row=1,
+            col=1,
+            secondary_y=True,
+            tickvals=[1, 2, 3, 4],
+            ticktext=['被动补库', '主动补库', '被动去库', '主动去库'],
+        )
 
-    # 情绪温度
-    fig.add_trace(
-        go.Scatter(
-            x=dates,
-            y=sentiment_scores,
-            mode='lines',
-            name='情绪温度',
-            line=dict(color='red', width=2),
-            fill='tozeroy'
-        ),
-        row=2, col=1
-    )
+    if not juglar_df.empty:
+        labels = {
+            'capacity_utilization': '产能利用率',
+            'fixed_investment': '固定投资增速',
+            'ppi': 'PPI同比',
+            'roe': 'ROE趋势',
+            'credit_growth': '信贷增速',
+        }
+        for column in juglar_df.columns[:3]:
+            fig.add_trace(
+                go.Scatter(
+                    x=juglar_df.index,
+                    y=juglar_df[column],
+                    mode='lines',
+                    name=labels.get(column, column),
+                ),
+                row=2,
+                col=1,
+            )
+        fig.update_yaxes(title_text='指数 / 增速', row=2, col=1)
 
-    # 添加阈值线
-    fig.add_hline(y=20, line_dash="dash", line_color="green", row=2, col=1)
-    fig.add_hline(y=80, line_dash="dash", line_color="red", row=2, col=1)
-
-    fig.update_layout(height=600, showlegend=True)
-    fig.update_yaxes(title_text="阶段", row=1, col=1)
-    fig.update_yaxes(title_text="温度", row=2, col=1)
-
-    st.plotly_chart(fig, use_container_width=True)
-
-
-def render_sentiment_chart():
-    """渲染情绪分析图"""
-    cycle_analysis = get_market_analysis()
-    pendulum = cycle_analysis['pendulum']
-
-    # 创建雷达图
-    categories = ['估值', '情绪', '流动性', '市场宽度']
-    values = [
-        pendulum['valuation'],
-        pendulum['sentiment'],
-        pendulum['liquidity'],
-        pendulum['breadth']
-    ]
-
-    fig = go.Figure(data=go.Scatterpolar(
-        r=values,
-        theta=categories,
-        fill='toself',
-        name='当前状态'
-    ))
+    if not pendulum_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=pendulum_df['timestamp'],
+                y=pendulum_df['total_score'],
+                mode='lines',
+                name='情绪温度',
+                line=dict(color='#ff375f', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(255, 55, 95, 0.08)',
+            ),
+            row=3,
+            col=1,
+        )
+        fig.add_hline(y=80, line_dash='dash', line_color='#ff3b30', row=3, col=1)
+        fig.add_hline(y=20, line_dash='dash', line_color='#34c759', row=3, col=1)
+        fig.update_yaxes(title_text='得分', row=3, col=1)
 
     fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 100]
-            )
-        ),
-        showlegend=False,
-        height=400
+        height=900,
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        margin=dict(l=40, r=40, t=80, b=40),
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # 显示详细数值
+    if kitchin_df.empty:
+        st.caption("⚠️ 暂无库存周期历史数据，请刷新或重新下载。")
+    if juglar_df.empty:
+        st.caption("⚠️ 暂无朱格拉指标历史数据，请刷新或重新下载。")
+    if pendulum_df.empty:
+        st.caption("⚠️ 暂无情绪历史数据，请刷新或重新下载。")
+
+
+def render_sentiment_chart(pendulum: Dict[str, Any]) -> None:
+    categories = ['估值', '情绪', '流动性', '市场宽度']
+    values = [
+        _to_float(pendulum.get('valuation')) or 0,
+        _to_float(pendulum.get('sentiment')) or 0,
+        _to_float(pendulum.get('liquidity')) or 0,
+        _to_float(pendulum.get('breadth')) or 0,
+    ]
+
+    fig = go.Figure(
+        data=go.Scatterpolar(r=values, theta=categories, fill='toself', name='当前状态')
+    )
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+        showlegend=False,
+        height=420,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("估值", f"{pendulum['valuation']:.1f}")
-    col2.metric("情绪", f"{pendulum['sentiment']:.1f}")
-    col3.metric("流动性", f"{pendulum['liquidity']:.1f}")
-    col4.metric("市场宽度", f"{pendulum['breadth']:.1f}")
+    col1.metric("估值", format_number(pendulum.get('valuation'), show_sign=False))
+    col2.metric("情绪", format_number(pendulum.get('sentiment'), show_sign=False))
+    col3.metric("流动性", format_number(pendulum.get('liquidity'), show_sign=False))
+    col4.metric("市场宽度", format_number(pendulum.get('breadth'), show_sign=False))
 
 
-def render_sector_rotation_chart():
-    """渲染行业轮动图"""
-    advice = get_investment_advice()
+def render_sector_rotation_chart(advice: Dict[str, Any]) -> None:
     sectors = advice['sector_advice']['combined_recommendation']
+    overweight = sectors.get('overweight', [])[:5]
+    underweight = sectors.get('underweight', [])[:4]
 
-    # 创建横向条形图
-    overweight = sectors['overweight'][:5]
-    underweight = sectors['underweight'][:3]
+    if not overweight and not underweight:
+        st.info("暂无行业轮动数据，请刷新分析。")
+        return
 
     fig = go.Figure()
-
-    fig.add_trace(go.Bar(
-        y=overweight,
-        x=[1.0] * len(overweight),
-        orientation='h',
-        name='超配',
-        marker_color='green'
-    ))
-
-    fig.add_trace(go.Bar(
-        y=underweight,
-        x=[-1.0] * len(underweight),
-        orientation='h',
-        name='低配',
-        marker_color='red'
-    ))
+    if overweight:
+        fig.add_trace(
+            go.Bar(
+                y=overweight,
+                x=[1.0] * len(overweight),
+                orientation='h',
+                name='超配',
+                marker_color='#34c759',
+            )
+        )
+    if underweight:
+        fig.add_trace(
+            go.Bar(
+                y=underweight,
+                x=[-1.0] * len(underweight),
+                orientation='h',
+                name='低配',
+                marker_color='#ff3b30',
+            )
+        )
 
     fig.update_layout(
         title="行业配置建议",
         xaxis_title="配置倾向",
         yaxis_title="行业",
         barmode='relative',
-        height=400
+        height=420,
     )
+    fig.update_xaxes(showticklabels=False)
 
     st.plotly_chart(fig, use_container_width=True)
 
 
-def get_phase_color(phase):
-    """根据周期阶段返回颜色"""
-    color_map = {
-        1: 'bullish',   # 复苏/被动补库
-        2: 'bullish',   # 繁荣/主动补库
-        3: 'bearish',   # 衰退/被动去库
-        4: 'bearish'    # 萧条/主动去库
-    }
-    return color_map.get(phase, 'neutral')
+def render_charts(
+    cycle_history: Dict[str, pd.DataFrame],
+    juglar_history: Dict[str, pd.Series],
+    cycle_analysis: Dict[str, Any],
+    advice: Dict[str, Any],
+) -> None:
+    st.markdown("### 📈 数据可视化")
+
+    tab1, tab2, tab3 = st.tabs(["周期趋势", "情绪雷达", "行业轮动"])
+
+    with tab1:
+        render_cycle_trend_chart(cycle_history, juglar_history)
+
+    with tab2:
+        render_sentiment_chart(cycle_analysis['pendulum'])
+
+    with tab3:
+        render_sector_rotation_chart(advice)
 
 
-def get_temperature_color(score):
-    """根据情绪温度返回颜色"""
-    if score < 30:
-        return 'bullish'
-    elif score < 70:
-        return 'neutral'
-    else:
-        return 'bearish'
+# ---------------------------------------------------------------------------
+# 业务逻辑
+# ---------------------------------------------------------------------------
+
+def trigger_data_download(years: int = 5) -> None:
+    downloader = DataDownloader()
+    downloader.download_all(years=years)
+    st.cache_data.clear()
 
 
-def main():
-    """主函数"""
-    # 侧边栏
+def main() -> None:
     with st.sidebar:
-        st.image("https://via.placeholder.com/300x100?text=A%E8%82%A1%E9%87%8F%E5%8C%96%E7%B3%BB%E7%BB%9F", use_column_width=True)
+        st.image(
+            "https://assets.apple.com/v/iphone/home/y/images/overview/hero_iphone_15__f8dvj96oq0mm_large.jpg",
+            use_column_width=True,
+        )
 
         st.markdown("---")
-
         st.markdown("### ⚙️ 设置")
 
-        # 刷新按钮
-        if st.button("🔄 刷新数据", use_container_width=True):
+        cache_manager = DataCacheManager()
+        macro_ready = cache_manager.ensure_keys('macro_data', ['gdp', 'ppi', 'pmi', 'social_financing'])
+        market_ready = cache_manager.ensure_keys('market_data', ['hs300', 'sh000001'])
+
+        if macro_ready and market_ready:
+            st.success("已检测到真实宏观与市场数据缓存，刷新分析即可查看最新结果。")
+        else:
+            missing_parts = []
+            if not macro_ready:
+                missing_parts.append("宏观数据（GDP、PPI、PMI、社融）")
+            if not market_ready:
+                missing_parts.append("市场数据（沪深300、上证指数）")
+            missing_text = "；".join(missing_parts)
+            st.warning(
+                "当前缺少 "
+                f"{missing_text} 的真实缓存。点击下方“⬇️ 下载最新数据”按钮，或在终端执行 "
+                "`python scripts/download_data.py` 后重新进入页面。"
+            )
+
+        if st.button("⬇️ 下载最新数据", use_container_width=True):
+            with st.spinner("正在下载最新数据..."):
+                trigger_data_download(years=5)
+            st.success("数据下载完成，缓存已更新")
+            st.rerun()
+
+        if st.button("🔄 刷新分析", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
-        # 下载报告
-        if st.button("📥 下载报告", use_container_width=True):
-            system = init_system()
-            report = system.generate_daily_report()
-            st.download_button(
-                label="保存报告",
-                data=report,
-                file_name=f"report_{datetime.now().strftime('%Y%m%d')}.txt",
-                mime="text/plain"
-            )
+        report = get_daily_report()
+        st.download_button(
+            label="📥 下载今日报告",
+            data=report,
+            file_name=f"report_{datetime.now().strftime('%Y%m%d')}.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
 
         st.markdown("---")
-
         st.markdown("### 📚 快速链接")
         st.markdown("- [使用指南](README.md)")
         st.markdown("- [新手指南](新手使用指南.md)")
+        st.markdown("- [Mac一步步操作](Mac一步步操作指南.md)")
         st.markdown("- [GitHub](https://github.com/akfamily/akshare)")
 
         st.markdown("---")
-
-        st.markdown("### ℹ️ 关于")
-        st.markdown("""
-        **版本**: 1.0.0
-        **更新**: 2025-10-21
-        **作者**: AI量化团队
-
-        基于周期理论的A股量化分析系统
-        """)
-
-    # 主内容区
-    render_header()
+        st.markdown(
+            """
+            **版本**: 1.0.0  
+            **更新**: 2025-10-21  
+            **作者**: AI量化团队
+            """
+        )
 
     try:
-        # 获取数据
-        cycle_analysis = get_market_analysis()
-        advice = get_investment_advice()
+        cycle_analysis = get_market_analysis_data()
+        advice = get_investment_advice_data()
+        strategies = get_strategy_data()
+        cycle_history = get_cycle_history_data()
+        juglar_history = get_juglar_indicator_data()
 
-        # 渲染各个部分
+        render_header(cycle_analysis)
         render_cycle_dashboard(cycle_analysis)
         st.markdown("---")
 
-        render_investment_advice(advice)
+        render_investment_advice(advice, strategies)
         st.markdown("---")
 
         render_key_points(advice)
         st.markdown("---")
 
-        render_charts()
+        render_charts(cycle_history, juglar_history, cycle_analysis, advice)
 
-    except Exception as e:
-        st.error(f"加载数据失败: {str(e)}")
-        st.info("请确保已经运行 `python3 main.py` 至少一次")
+    except Exception as exc:  # pragma: no cover - UI 层兜底提示
+        st.error(f"加载数据失败: {exc}")
+        st.info("请确保已经运行 `python scripts/download_data.py` 下载数据缓存。")
 
-    # 页脚
     st.markdown("---")
     st.markdown(
-        "<div style='text-align: center; color: gray;'>"
-        "© 2025 A股量化分析系统 | 仅供学习研究使用"
-        "</div>",
-        unsafe_allow_html=True
+        "<div style='text-align: center; color: gray;'>© 2025 A股量化分析系统 | 仅供学习研究使用</div>",
+        unsafe_allow_html=True,
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

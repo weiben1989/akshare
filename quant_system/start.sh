@@ -43,10 +43,12 @@ echo "  ${BLUE}3${NC}) 🌐 启动Web界面"
 echo "  ${BLUE}4${NC}) 💾 下载历史数据"
 echo "  ${BLUE}5${NC}) 📖 查看使用示例"
 echo "  ${BLUE}6${NC}) 🔄 全部运行（测试+报告+Web）"
+echo "  ${BLUE}7${NC}) ✅ 检查是否已加载真实数据"
+echo "  ${BLUE}8${NC}) 🟢 启动真实数据专用界面 (8701)"
 echo "  ${BLUE}0${NC}) 退出"
 echo ""
 
-read -p "请输入选项 [0-6]: " choice
+read -p "请输入选项 [0-8]: " choice
 
 case $choice in
     1)
@@ -100,6 +102,18 @@ case $choice in
         else
             echo -e "${RED}测试失败，请检查环境${NC}"
         fi
+        ;;
+    7)
+        echo -e "${BLUE}检查缓存中的真实数据...${NC}"
+        python3 scripts/check_real_data.py
+        ;;
+    8)
+        echo -e "${BLUE}启动真实数据专用界面...${NC}"
+        echo ""
+        echo -e "${GREEN}访问地址: http://localhost:8701${NC}"
+        echo -e "${YELLOW}按 Ctrl+C 停止服务${NC}"
+        echo ""
+        streamlit run real_data_dashboard.py --server.port 8701
         ;;
     0)
         echo -e "${GREEN}再见！${NC}"

@@ -8,15 +8,19 @@ import os
 from datetime import datetime
 from typing import Dict, Optional
 
+import pandas as pd
+
 # 添加父目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.settings import Config, DEFAULT_CONFIG
 from utils.logger import logger, get_logger
 from data.fetcher.akshare_api import AKShareAPI
+from data.storage import DataCacheManager
 from analysis.cycle.kitchin import KitchinCycle
 from analysis.cycle.juglar import JuglarCycle
 from analysis.cycle.marks_pendulum import MarksPendulum
+from strategy.allocation import SwensenPortfolioStrategy, AllWeatherPortfolioStrategy
 
 
 class QuantSystem:
@@ -40,11 +44,17 @@ class QuantSystem:
 
         # 数据获取器
         self.data_api = AKShareAPI()
+        self.cache_manager = DataCacheManager()
 
         # 周期分析器
-        self.kitchin_cycle = KitchinCycle(self.data_api)
-        self.juglar_cycle = JuglarCycle(self.data_api)
-        self.marks_pendulum = MarksPendulum(self.data_api)
+        self.kitchin_cycle = KitchinCycle(self.data_api, self.cache_manager)
+        self.juglar_cycle = JuglarCycle(self.data_api, self.cache_manager)
+        self.marks_pendulum = MarksPendulum(self.data_api, self.cache_manager)
+        self.swensen_strategy = SwensenPortfolioStrategy(self.data_api, self.cache_manager)
+        self.all_weather_strategy = AllWeatherPortfolioStrategy(self.data_api, self.cache_manager)
+
+        # 主动提示本地数据状态，帮助使用者确认是否已经替换为真实数据
+        self._log_cache_status_hint()
 
         self.logger.info("量化系统初始化完成")
 
@@ -140,6 +150,59 @@ class QuantSystem:
 
         return advice
 
+    def get_allocation_strategies(self) -> Dict[str, Dict]:
+        """返回经典资产配置策略的最新结果。"""
+
+        return {
+            'swensen': self.swensen_strategy.generate_portfolio(),
+            'all_weather': self.all_weather_strategy.generate_portfolio()
+        }
+
+    def get_cycle_history(self) -> Dict[str, pd.DataFrame]:
+        """获取周期与情绪相关的历史数据。"""
+
+        return {
+            'kitchin': self.kitchin_cycle.get_history(),
+            'pendulum': self.marks_pendulum.get_history()
+        }
+
+    def get_juglar_indicators(self) -> Dict[str, pd.Series]:
+        """获取朱格拉周期各指标的历史序列。"""
+
+        return self.juglar_cycle.get_indicator_history()
+
+    # ------------------------------------------------------------------
+    # 内部工具
+    # ------------------------------------------------------------------
+    def _log_cache_status_hint(self) -> None:
+        """在初始化后输出关键数据集的可用性提示。"""
+
+        required_datasets = {
+            'macro_data': ['gdp', 'ppi', 'pmi', 'social_financing'],
+            'market_data': ['hs300', 'sh000001'],
+        }
+
+        missing = []
+        for dataset, keys in required_datasets.items():
+            if not self.cache_manager.ensure_keys(dataset, keys):
+                missing.append((dataset, keys))
+
+        if not missing:
+            self.logger.info("检测到本地缓存的宏观与市场数据均已就绪，将直接使用真实数据进行分析。")
+            return
+
+        missing_text = []
+        for dataset, keys in missing:
+            joined_keys = ", ".join(keys)
+            missing_text.append(f"{dataset} ({joined_keys})")
+
+        readable = "; ".join(missing_text)
+        self.logger.warning(
+            "当前缓存缺少以下真实数据: %s。请运行 `python scripts/download_data.py` "
+            "下载最新数据，或在 Web 页面点击“⬇️ 下载最新数据”按钮。下载成功后再运行本程序即可看到稳定的真实指标。",
+            readable,
+        )
+
     def generate_daily_report(self) -> str:
         """
         生成每日市场分析报告
@@ -220,22 +283,19 @@ class QuantSystem:
         # 基于基钦周期
         kitchin = cycle_analysis['kitchin']
         points.append(
-            f"库存周期处于{kitchin['phase_name']}阶段，"
-            f"预计还将持续{kitchin['estimated_duration']}个月"
+            f"库存周期处于{kitchin['phase_name']}阶段，预计还将持续{kitchin['estimated_duration']}个月"
         )
 
         # 基于朱格拉周期
         juglar = cycle_analysis['juglar']
         points.append(
-            f"产能周期处于{juglar['phase_name']}阶段，"
-            f"{juglar['next_inflection']}"
+            f"产能周期处于{juglar['phase_name']}阶段，{juglar['next_inflection']}"
         )
 
         # 基于情绪
         pendulum = cycle_analysis['pendulum']
         points.append(
-            f"市场情绪温度为{pendulum['total_score']:.1f}，"
-            f"{pendulum['recommendation']['reason']}"
+            f"市场情绪温度为{pendulum['total_score']:.1f}，{pendulum['recommendation']['reason']}"
         )
 
         return points

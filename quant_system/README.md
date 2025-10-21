@@ -97,6 +97,55 @@ report = system.generate_daily_report()
 print(report)
 ```
 
+## 🔄 使用真实数据
+
+默认情况下，分析模块会优先读取本地缓存的宏观与市场数据。当缓存缺失时，系统会提示并指引你下载最新的真实数据。常见操作如下：
+
+1. **首次拉取数据**  
+   在 `quant_system` 目录运行：
+   ```bash
+   python scripts/download_data.py
+   ```
+   脚本会逐项下载 GDP、PPI、PMI、社融、指数行情等数据，并写入 `data/cache/`。
+
+2. **通过网页刷新**  
+   启动可视化界面：
+   ```bash
+   streamlit run web_app.py
+   ```
+   在左侧侧边栏点击「⬇️ 下载最新数据」即可完成同样的操作，更新完成后页面会自动刷新分析结果。
+
+3. **确认数据是否就绪**
+   - 终端运行 `python main.py` 时，日志会提示“检测到本地缓存的宏观与市场数据均已就绪”。
+   - Web 页面侧边栏会显示绿色提示卡片，说明正在使用真实数据。如果看到黄色提示，请先重新下载。
+   - 也可以运行 `python scripts/check_real_data.py`（或在 `start.sh` 中选择“✅ 检查是否已加载真实数据”），脚本会逐项列出缓存中的真实表格与时间范围，缺失时给出修复指引。
+
+4. **清理旧的模拟数据**
+   若之前运行过旧版本、缓存中可能存在模拟数据，可手动删除 `data/cache/*.pkl` 后重新执行步骤 1 或在页面中点击重新下载按钮。
+
+### 🆕 真实数据专用界面（新分支与新端口）
+
+为彻底区分演示环境与真实数据环境，可在拉取最新代码后新建一个本地分支专门承载真实数据界面：
+```bash
+git fetch origin
+git switch -c real-data-dashboard origin/work
+```
+
+随后进入 `quant_system` 目录，运行全新的 Streamlit 入口文件。我们建议使用 8701 端口，避免与旧版演示页面冲突：
+```bash
+cd quant_system
+streamlit run real_data_dashboard.py --server.port 8701
+```
+
+该页面会先对 `data/cache` 内的宏观、市场及资金流数据逐项校验，只要存在缺失就会阻止展示并提示重新下载，确保所有分析都建立在真实数据之上。侧边栏还提供“一键重新下载真实数据”按钮，方便随时刷新缓存。
+
+### 常见错误排查
+
+- `fatal: not a git repository`: 说明当前终端不在项目目录内。请先执行 `cd /Users/你的用户名/Documents/quant_workspace/akshare`（或你的实际安装路径），随后再运行 `git pull`、`python main.py` 等命令。
+- `cd: quant_system: No such file or directory`: 同样是路径错误，先确认已经进入仓库根目录，再执行 `cd quant_system`。
+
+更多面向零基础用户的图文步骤，可查看《[Mac一步步操作指南](Mac一步步操作指南.md)》或《[新手使用指南](新手使用指南.md)》。
+
 ## 📊 核心模块说明
 
 ### 1. 基钦周期（库存周期）
