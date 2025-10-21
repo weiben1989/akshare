@@ -27,14 +27,14 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 
-# 添加父目录到路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 添加当前目录到路径（支持直接导入）
+sys.path.insert(0, str(Path(__file__).parent))
 
-from review_engine.providers.akshare_provider import AKShareProvider
-from review_engine.core.factors import FactorCalculator, create_factor_summary
-from review_engine.core.scoring import FourDimensionScorer
-from review_engine.core.allocation import AssetAllocator
-from review_engine.reporting.renderer import ReportRenderer
+from providers.akshare_provider import AKShareProvider
+from core.factors import FactorCalculator, create_factor_summary
+from core.scoring import FourDimensionScorer
+from core.allocation import AssetAllocator
+from reporting.renderer import ReportRenderer
 
 # 配置日志
 logging.basicConfig(
