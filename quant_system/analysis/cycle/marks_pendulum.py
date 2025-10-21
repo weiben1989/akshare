@@ -12,10 +12,11 @@ if project_root not in sys.path:
 
 import pandas as pd
 import numpy as np
-from typing import Dict
+from typing import Dict, Optional, Tuple, List, Any
+from datetime import datetime
 
 from utils.logger import logger
-from utils.helpers import DataHelper
+from data.storage import DataCacheManager
 
 
 class MarksPendulum:
@@ -26,12 +27,13 @@ class MarksPendulum:
     钟摆位置：0（极度悲观）到 100（极度乐观）
     """
 
-    def __init__(self, data_fetcher=None):
+    def __init__(self, data_fetcher=None, cache_manager: Optional[DataCacheManager] = None):
         """
         Args:
             data_fetcher: 数据获取器实例
         """
         self.data_fetcher = data_fetcher
+        self.cache_manager = cache_manager
         self.logger = logger
 
         # 各维度权重
@@ -42,6 +44,9 @@ class MarksPendulum:
             'breadth': 0.2         # 市场宽度权重
         }
 
+        self.latest_details: Dict[str, Dict] = {}
+        self.history_records: List[Dict[str, float]] = []
+
     def calculate_pendulum_position(self) -> Dict:
         """
         计算钟摆位置：0（极度悲观）到 100（极度乐观）
@@ -49,17 +54,12 @@ class MarksPendulum:
         Returns:
             包含总分及各维度得分的字典
         """
-        # 1. 估值维度 (0-100)
-        valuation_score = self._calc_valuation_percentile()
+        context = self._load_context()
 
-        # 2. 情绪维度 (0-100)
-        sentiment_score = self._calc_sentiment_score()
-
-        # 3. 流动性维度 (0-100)
-        liquidity_score = self._calc_liquidity_score()
-
-        # 4. 市场宽度维度 (0-100)
-        breadth_score = self._calc_market_breadth()
+        valuation_score, valuation_detail = self._calc_valuation_percentile(context)
+        sentiment_score, sentiment_detail = self._calc_sentiment_score(context)
+        liquidity_score, liquidity_detail = self._calc_liquidity_score(context)
+        breadth_score, breadth_detail = self._calc_market_breadth(context)
 
         # 综合得分
         total_score = (
@@ -69,6 +69,25 @@ class MarksPendulum:
             breadth_score * self.components['breadth']
         )
 
+        self.latest_details = {
+            'valuation': valuation_detail,
+            'sentiment': sentiment_detail,
+            'liquidity': liquidity_detail,
+            'breadth': breadth_detail,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+        self.history_records.append({
+            'timestamp': self.latest_details['timestamp'],
+            'total_score': total_score,
+            'valuation': valuation_score,
+            'sentiment': sentiment_score,
+            'liquidity': liquidity_score,
+            'breadth': breadth_score
+        })
+        if len(self.history_records) > 180:
+            self.history_records = self.history_records[-180:]
+
         result = {
             'total_score': total_score,
             'level': self._classify_level(total_score),
@@ -76,14 +95,24 @@ class MarksPendulum:
             'sentiment': sentiment_score,
             'liquidity': liquidity_score,
             'breadth': breadth_score,
-            'recommendation': self._get_recommendation(total_score)
+            'recommendation': self._get_recommendation(total_score),
+            'details': self.latest_details
         }
 
         self.logger.info(f"市场情绪温度: {total_score:.1f} ({result['level']})")
 
         return result
 
-    def _calc_valuation_percentile(self) -> float:
+    def get_history(self, window: int = 180) -> pd.DataFrame:
+        """返回历史记录供可视化使用。"""
+
+        if not self.history_records:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(self.history_records)
+        return df.tail(window).reset_index(drop=True)
+
+    def _calc_valuation_percentile(self, context: Dict[str, pd.DataFrame]) -> Tuple[float, Dict]:
         """
         计算估值维度得分
 
@@ -93,31 +122,49 @@ class MarksPendulum:
         - 股债性价比
 
         Returns:
-            估值得分 (0-100)
+            估值得分 (0-100) 及细节
         """
-        # 简化版本：模拟数据
-        # 实际应用中应该使用真实市场数据
+        df = context.get('valuation', pd.DataFrame())
+        details: Dict[str, Any] = {
+            'records': len(df)
+        }
 
-        # 全A PE历史分位数
-        pe_percentile = np.random.uniform(20, 80)
+        scores = []
+        quantiles: List[float] = []
 
-        # 全A PB历史分位数
-        pb_percentile = np.random.uniform(20, 80)
+        if not df.empty:
+            for col in ['quantileInRecent10YearsAveragePeLyr', 'quantileInRecent10YearsAveragePeTtm']:
+                if col in df.columns:
+                    series = pd.to_numeric(df[col], errors='coerce').dropna()
+                    if not series.empty:
+                        value = float(series.iloc[-1])
+                        if value <= 1:
+                            value *= 100
+                        quantiles.append(float(np.clip(value, 0, 100)))
 
-        # 风险溢价得分（溢价越高，估值越低，得分越低）
-        risk_premium = np.random.uniform(2, 6)  # 百分点
-        risk_premium_score = max(0, 100 - risk_premium * 15)
+            if quantiles:
+                scores.append(np.mean(quantiles))
+            details['pe_quantiles'] = quantiles
 
-        # 加权平均
-        valuation_score = (
-            pe_percentile * 0.4 +
-            pb_percentile * 0.4 +
-            risk_premium_score * 0.2
-        )
+            pe_series = pd.to_numeric(df.get('middlePETTM'), errors='coerce').dropna()
+            if not pe_series.empty:
+                latest_pe = float(pe_series.iloc[-1])
+                details['latest_pe_ttm'] = latest_pe
+                if len(pe_series) > 120:
+                    rolling = pe_series.rolling(window=120).mean().iloc[-1]
+                    if rolling and not np.isnan(rolling):
+                        relative = latest_pe / rolling
+                        details['relative_to_10m_avg'] = relative
+                        scores.append(float(np.clip(relative * 50, 0, 100)))
 
-        return valuation_score
+        if not scores:
+            score = 50.0
+        else:
+            score = float(np.clip(np.mean(scores), 0, 100))
 
-    def _calc_sentiment_score(self) -> float:
+        return score, details
+
+    def _calc_sentiment_score(self, context: Dict[str, pd.DataFrame]) -> Tuple[float, Dict]:
         """
         计算情绪维度得分
 
@@ -129,34 +176,37 @@ class MarksPendulum:
         - 搜索指数："股票"、"炒股"
 
         Returns:
-            情绪得分 (0-100)
+            情绪得分 (0-100)及细节
         """
-        # 融资买入占比（正常范围5-15%）
-        margin_buy_ratio = np.random.uniform(5, 15)
-        margin_score = min((margin_buy_ratio - 5) / 10 * 100, 100)
+        details: Dict[str, Any] = {}
 
-        # 两融余额增速（-20%到+40%）
-        margin_balance_growth = np.random.uniform(-20, 40)
-        balance_score = min((margin_balance_growth + 20) / 60 * 100, 100)
+        market_df = context.get('hs300', pd.DataFrame())
+        close_series = self._prepare_series(market_df, ['close', '收盘', '收盘价'])
+        momentum_score = 50.0
+        momentum_pct = 0.0
+        if len(close_series) > 21:
+            returns_20 = close_series.pct_change(20).dropna() * 100
+            if not returns_20.empty:
+                momentum_pct = float(returns_20.iloc[-1])
+                momentum_score = self._percentile(returns_20, momentum_pct)
+        details['momentum_pct'] = momentum_pct
+        details['momentum_score'] = momentum_score
 
-        # 新开户数增速
-        new_account_growth = np.random.uniform(-30, 100)
-        account_score = min((new_account_growth + 30) / 130 * 100, 100)
+        north_flow_df = context.get('north_flow', pd.DataFrame())
+        north_flow_score = 50.0
+        north_flow_value = 0.0
+        if isinstance(north_flow_df, pd.DataFrame) and not north_flow_df.empty:
+            north_series = pd.to_numeric(north_flow_df.get('资金净流入'), errors='coerce').dropna()
+            if not north_series.empty:
+                north_flow_value = float(north_series.iloc[-1])
+                north_flow_score = self._percentile(north_series, north_flow_value)
+        details['north_flow'] = north_flow_value
+        details['north_flow_score'] = north_flow_score
 
-        # 搜索热度（相对值）
-        search_heat = np.random.uniform(30, 100)
+        score = momentum_score * 0.6 + north_flow_score * 0.4
+        return score, details
 
-        # 加权平均
-        sentiment_score = (
-            margin_score * 0.3 +
-            balance_score * 0.3 +
-            account_score * 0.2 +
-            search_heat * 0.2
-        )
-
-        return sentiment_score
-
-    def _calc_liquidity_score(self) -> float:
+    def _calc_liquidity_score(self, context: Dict[str, pd.DataFrame]) -> Tuple[float, Dict]:
         """
         计算流动性维度得分
 
@@ -168,35 +218,35 @@ class MarksPendulum:
         - 北向资金流向强度
 
         Returns:
-            流动性得分 (0-100)
+            流动性得分 (0-100)及细节
         """
-        # M2-M1剪刀差（0-10个百分点，越大流动性越紧）
-        m2_m1_gap = np.random.uniform(0, 10)
-        gap_score = max(0, 100 - m2_m1_gap * 10)
+        details: Dict[str, Any] = {}
 
-        # Shibor利率（1-5%）
-        shibor = np.random.uniform(1, 5)
-        shibor_score = max(0, 100 - (shibor - 1) * 25)
+        m2_df = context.get('macro_m2', pd.DataFrame())
+        social_df = context.get('macro_social', pd.DataFrame())
+        north_flow_df = context.get('north_flow', pd.DataFrame())
 
-        # 10年国债收益率（2-4%）
-        bond_yield = np.random.uniform(2, 4)
-        yield_score = max(0, 100 - (bond_yield - 2) * 50)
+        m2_series = self._prepare_series(m2_df, ['货币和准货币(M2)-同比增长'])
+        social_series = self._prepare_series(social_df, ['社会融资规模增量'])
+        social_growth = self._calc_growth_series(social_series)
 
-        # 北向资金流入强度（-100亿到+200亿）
-        northbound_flow = np.random.uniform(-100, 200)
-        flow_score = min((northbound_flow + 100) / 300 * 100, 100)
+        m2_score = self._percentile(m2_series, float(m2_series.iloc[-1])) if len(m2_series) else 50.0
+        social_score = self._percentile(social_growth, float(social_growth.iloc[-1])) if len(social_growth) else 50.0
 
-        # 加权平均
-        liquidity_score = (
-            gap_score * 0.25 +
-            shibor_score * 0.25 +
-            yield_score * 0.25 +
-            flow_score * 0.25
-        )
+        north_score = 50.0
+        if isinstance(north_flow_df, pd.DataFrame) and '资金净流入' in north_flow_df.columns:
+            north_series = pd.to_numeric(north_flow_df['资金净流入'], errors='coerce').dropna()
+            if not north_series.empty:
+                north_score = self._percentile(north_series, float(north_series.iloc[-1]))
 
-        return liquidity_score
+        details['m2_yoy'] = float(m2_series.iloc[-1]) if len(m2_series) else None
+        details['social_financing_yoy'] = float(social_growth.iloc[-1]) if len(social_growth) else None
+        details['north_flow_score'] = north_score
 
-    def _calc_market_breadth(self) -> float:
+        score = m2_score * 0.4 + social_score * 0.4 + north_score * 0.2
+        return score, details
+
+    def _calc_market_breadth(self, context: Dict[str, pd.DataFrame]) -> Tuple[float, Dict]:
         """
         计算市场宽度得分
 
@@ -208,36 +258,141 @@ class MarksPendulum:
         - 行业上涨数量占比
 
         Returns:
-            市场宽度得分 (0-100)
+            市场宽度得分 (0-100)及细节
         """
-        # 上涨家数占比（0-100%）
-        advance_ratio = np.random.uniform(0, 100)
+        details: Dict[str, Any] = {}
 
-        # 创新高/创新低比值（0-10）
-        new_high_low_ratio = np.random.uniform(0, 10)
-        high_low_score = min(new_high_low_ratio / 10 * 100, 100)
+        stock_df = context.get('stock_list', pd.DataFrame())
+        pct_series = self._extract_change_series(stock_df)
+        advancers = int((pct_series > 0).sum())
+        decliners = int((pct_series < 0).sum())
+        total = advancers + decliners
+        adv_ratio = advancers / total if total else 0.5
 
-        # 涨停/跌停比值（0-20）
-        limit_up_down_ratio = np.random.uniform(0, 20)
-        limit_score = min(limit_up_down_ratio / 20 * 100, 100)
+        north_flow_df = context.get('north_flow', pd.DataFrame())
+        board_ratio = adv_ratio
+        if isinstance(north_flow_df, pd.DataFrame) and {'上涨数', '下跌数', '持平数'}.issubset(north_flow_df.columns):
+            last_row = north_flow_df.tail(1)
+            up = float(pd.to_numeric(last_row['上涨数'], errors='coerce').iloc[-1]) if not last_row.empty else 0.0
+            down = float(pd.to_numeric(last_row['下跌数'], errors='coerce').iloc[-1]) if not last_row.empty else 0.0
+            flat = float(pd.to_numeric(last_row['持平数'], errors='coerce').iloc[-1]) if not last_row.empty else 0.0
+            total_board = up + down + flat
+            if total_board:
+                board_ratio = up / total_board
 
-        # 破净股数量（反向，0-500只）
-        pb_below_one = np.random.uniform(0, 500)
-        pb_score = max(0, 100 - pb_below_one / 5)
+        details['advancers'] = advancers
+        details['decliners'] = decliners
+        details['advancers_ratio'] = adv_ratio
+        details['board_adv_ratio'] = board_ratio
 
-        # 行业上涨占比
-        industry_advance_ratio = np.random.uniform(0, 100)
+        score = adv_ratio * 100 * 0.6 + board_ratio * 100 * 0.4
+        return score, details
 
-        # 加权平均
-        breadth_score = (
-            advance_ratio * 0.3 +
-            high_low_score * 0.2 +
-            limit_score * 0.15 +
-            pb_score * 0.15 +
-            industry_advance_ratio * 0.2
+    # ==================== 数据加载与辅助函数 ====================
+
+    def _load_context(self) -> Dict[str, pd.DataFrame]:
+        context: Dict[str, pd.DataFrame] = {}
+        context['valuation'] = self._load_cached_dataframe('valuation_data', 'all_a', fetcher='get_stock_a_ttm_lyr')
+        context['hs300'] = self._load_cached_dataframe('market_data', 'hs300', fetcher='get_index_zh_a_hist', fetch_kwargs={'symbol': '000300'})
+        context['stock_list'] = self._load_cached_dataframe('market_data', 'stock_list', fetcher='get_stock_zh_a_spot')
+        context['north_flow'] = self._aggregate_north_flow(
+            self._load_cached_dataframe('fund_data', 'north_flow', fetcher='get_stock_em_hsgt_north_net_flow_in')
         )
+        context['macro_m2'] = self._load_cached_dataframe('macro_data', 'm2', fetcher='get_macro_china_m2')
+        context['macro_social'] = self._load_cached_dataframe('macro_data', 'social_financing', fetcher='get_macro_china_social_financing')
+        return context
 
-        return breadth_score
+    def _load_cached_dataframe(self, dataset: str, key: str, fetcher: Optional[str] = None,
+                                fetch_kwargs: Optional[Dict] = None) -> pd.DataFrame:
+        df = pd.DataFrame()
+        if self.cache_manager:
+            df = self.cache_manager.get_dataframe(dataset, key)
+        if (df is None or df.empty) and fetcher and self.data_fetcher:
+            fetch_func = getattr(self.data_fetcher, fetcher, None)
+            if callable(fetch_func):
+                fetch_kwargs = fetch_kwargs or {}
+                df = fetch_func(**fetch_kwargs)
+                if self.cache_manager and isinstance(df, pd.DataFrame) and not df.empty:
+                    data = self.cache_manager.load_dataset(dataset) or {}
+                    data[key] = df
+                    self.cache_manager.save_dataset(dataset, data)
+        if df is None:
+            df = pd.DataFrame()
+        return self._sort_dataframe(df)
+
+    def _aggregate_north_flow(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        temp = df.copy()
+        if '交易日' in temp.columns:
+            temp['交易日'] = pd.to_datetime(temp['交易日'], errors='coerce')
+        numeric_cols = ['资金净流入', '成交净买额', '上涨数', '下跌数', '持平数']
+        for col in numeric_cols:
+            if col in temp.columns:
+                temp[col] = pd.to_numeric(temp[col], errors='coerce')
+
+        if '交易日' in temp.columns:
+            grouped = temp.groupby('交易日')[numeric_cols].sum(min_count=1).dropna(how='all')
+            grouped = grouped.sort_index()
+            return grouped.reset_index()
+
+        return temp
+
+    def _sort_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
+
+        for column in ['日期', 'date', '交易日', '时间', '月份']:
+            if column in df.columns:
+                try:
+                    df[column] = pd.to_datetime(df[column], errors='coerce')
+                    df = df.sort_values(column)
+                    break
+                except Exception:
+                    continue
+        return df.reset_index(drop=True)
+
+    def _prepare_series(self, df: pd.DataFrame, candidates: List[str]) -> pd.Series:
+        if df is None or df.empty:
+            return pd.Series(dtype=float)
+
+        for column in candidates:
+            if column in df.columns:
+                series = pd.to_numeric(df[column], errors='coerce').dropna()
+                if not series.empty:
+                    return series.reset_index(drop=True)
+        return pd.Series(dtype=float)
+
+    def _extract_change_series(self, df: pd.DataFrame) -> pd.Series:
+        if df is None or df.empty:
+            return pd.Series(dtype=float)
+
+        for column in ['涨跌幅', '涨跌幅(%)', '涨跌额']:
+            if column in df.columns:
+                series = df[column].astype(str).str.replace('%', '').replace('--', np.nan)
+                series = pd.to_numeric(series, errors='coerce').dropna()
+                if not series.empty:
+                    return series.reset_index(drop=True)
+        return pd.Series(dtype=float)
+
+    def _calc_growth_series(self, series: pd.Series, periods: int = 12) -> pd.Series:
+        if series is None or series.empty:
+            return pd.Series(dtype=float)
+        if len(series) > periods:
+            growth = series.pct_change(periods=periods) * 100
+        else:
+            growth = series.pct_change() * 100
+        return growth.dropna()
+
+    def _percentile(self, series: pd.Series, value: float) -> float:
+        if series is None or series.empty:
+            return 50.0
+        clean = series.dropna()
+        if clean.empty:
+            return 50.0
+        percentile = np.sum(clean <= value) / len(clean) * 100
+        return float(np.clip(percentile, 0, 100))
 
     def _classify_level(self, score: float) -> str:
         """
