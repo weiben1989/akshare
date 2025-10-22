@@ -572,13 +572,18 @@ class AkshareDataProvider:
 
     def _write_parquet(self, table_name: str, df: pd.DataFrame, unique_cols: Sequence[str]) -> None:
         target = self.parquet_dir / f"{table_name}.parquet"
-        if target.exists():
-            existing = pd.read_parquet(target)
-            combined = pd.concat([existing, df], ignore_index=True)
-            combined.drop_duplicates(subset=list(unique_cols), keep="last", inplace=True)
-        else:
-            combined = df
-        combined.to_parquet(target, index=False)
+        try:
+            if target.exists():
+                existing = pd.read_parquet(target)
+                combined = pd.concat([existing, df], ignore_index=True)
+                combined.drop_duplicates(subset=list(unique_cols), keep="last", inplace=True)
+            else:
+                combined = df
+            combined.to_parquet(target, index=False)
+        except ImportError as exc:  # pragma: no cover - depends on optional engine
+            raise RuntimeError(
+                "Parquet 持久化需要安装 pyarrow 或 fastparquet（推荐 pip install pyarrow）"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Utility methods

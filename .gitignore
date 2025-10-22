@@ -17,6 +17,7 @@ colors
 .idea/
 # jupyter
 .ipynb_checkpoints
+.venv/
 
 #docs/source/_static/
 #docs/source/_templates/
