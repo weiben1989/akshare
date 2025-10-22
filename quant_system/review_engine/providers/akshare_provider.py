@@ -272,21 +272,41 @@ class AkShareProvider:
         获取两市成交额
 
         Args:
-            date: 日期
+            date: 日期 YYYY-MM-DD
 
         Returns:
             {'sh_amount': xx, 'sz_amount': xx, 'total_amount': xx}
         """
         try:
-            # 从指数数据中提取成交额
-            indices = self.fetch_indices(date)
+            # 转换日期格式：YYYY-MM-DD -> YYYYMMDD
+            date_fmt = date.replace('-', '')
 
-            sh_amount = indices[indices['symbol'] == 'sh000001']['amount'].values
-            sz_amount = indices[indices['symbol'] == 'sz399001']['amount'].values
+            sh_amount = 0.0
+            sz_amount = 0.0
 
-            sh_amount = float(sh_amount[0]) if len(sh_amount) > 0 else 0.0
-            sz_amount = float(sz_amount[0]) if len(sz_amount) > 0 else 0.0
+            # 1. 获取上海市场成交额
+            try:
+                sh_df = self._retry_fetch(ak.stock_sse_deal_daily, date=date_fmt)
+                if sh_df is not None and not sh_df.empty:
+                    # 找到"股票"行的成交金额（单位：万元）
+                    stock_row = sh_df[sh_df['产品类型'] == '股票']
+                    if not stock_row.empty and '成交金额' in stock_row.columns:
+                        sh_amount = float(stock_row['成交金额'].values[0]) / 10000  # 万元转亿元
+            except Exception as e:
+                logger.warning(f"获取上海市场成交额失败: {e}")
 
+            # 2. 获取深圳市场成交额
+            try:
+                sz_df = self._retry_fetch(ak.stock_szse_summary, date=date_fmt)
+                if sz_df is not None and not sz_df.empty:
+                    # 找到"股票"行的成交金额（单位：元）
+                    stock_row = sz_df[sz_df['证券类别'] == '股票']
+                    if not stock_row.empty and '成交金额' in stock_row.columns:
+                        sz_amount = float(stock_row['成交金额'].values[0]) / 100000000  # 元转亿元
+            except Exception as e:
+                logger.warning(f"获取深圳市场成交额失败: {e}")
+
+            # 如果都获取失败，返回默认值而不是报错（允许部分数据缺失）
             return {
                 'date': date,
                 'sh_amount': sh_amount,
@@ -296,51 +316,72 @@ class AkShareProvider:
 
         except Exception as e:
             logger.error(f"获取成交额失败: {e}")
-            raise DataValidationError(f"成交额数据获取失败: {e}")
+            # 返回默认值而不是抛出异常
+            return {
+                'date': date,
+                'sh_amount': 0.0,
+                'sz_amount': 0.0,
+                'total_amount': 0.0
+            }
 
     def fetch_market_breadth(self, date: str) -> Dict:
         """
         获取市场广度
 
+        注意：AkShare 的 stock_zh_a_spot_em 只能获取当天数据
+        对于历史日期，只能获取涨跌停池数据，涨跌家数无法获取
+
         Args:
-            date: 日期
+            date: 日期 YYYY-MM-DD
 
         Returns:
             涨跌家数、涨跌停等数据
         """
+        from datetime import datetime
+
+        up_count = 0
+        down_count = 0
+        flat_count = 0
+        limit_up_count = 0
+        limit_down_count = 0
+        max_continuous = 0
+
         try:
-            # 获取实时行情（当日快照）
-            spot_df = self._retry_fetch(ak.stock_zh_a_spot_em)
+            # 检查是否为当天
+            today = datetime.now().strftime('%Y-%m-%d')
+            is_today = (date == today)
 
-            if spot_df is None or spot_df.empty:
-                raise DataValidationError("A股快照数据为空")
+            # 只有当天才能获取实时涨跌家数
+            if is_today:
+                try:
+                    spot_df = self._retry_fetch(ak.stock_zh_a_spot_em)
+                    if spot_df is not None and not spot_df.empty and '涨跌幅' in spot_df.columns:
+                        up_count = len(spot_df[spot_df['涨跌幅'] > 0])
+                        down_count = len(spot_df[spot_df['涨跌幅'] < 0])
+                        flat_count = len(spot_df[spot_df['涨跌幅'] == 0])
+                except Exception as e:
+                    logger.warning(f"获取实时行情失败: {e}")
 
-            # 计算涨跌家数
-            up_count = len(spot_df[spot_df['涨跌幅'] > 0])
-            down_count = len(spot_df[spot_df['涨跌幅'] < 0])
-            flat_count = len(spot_df[spot_df['涨跌幅'] == 0])
-
-            # 获取涨停板
+            # 获取涨停板（支持历史数据）
             try:
-                limit_up_df = self._retry_fetch(ak.stock_zt_pool_em, date=date.replace('-', ''))
-                limit_up_count = 0 if limit_up_df is None or limit_up_df.empty else len(limit_up_df)
+                date_fmt = date.replace('-', '')
+                limit_up_df = self._retry_fetch(ak.stock_zt_pool_em, date=date_fmt)
+                if limit_up_df is not None and not limit_up_df.empty:
+                    limit_up_count = len(limit_up_df)
+                    # 连板高度
+                    if '连板数' in limit_up_df.columns:
+                        max_continuous = int(limit_up_df['连板数'].max())
+            except Exception as e:
+                logger.warning(f"获取涨停池失败 (日期: {date}): {e}")
 
-                # 连板高度
-                max_continuous = 0
-                if limit_up_df is not None and not limit_up_df.empty and '连板数' in limit_up_df.columns:
-                    max_continuous = int(limit_up_df['连板数'].max())
-            except:
-                logger.warning(f"获取涨停池失败 (日期: {date})，可能非交易日")
-                limit_up_count = 0
-                max_continuous = 0
-
-            # 获取跌停板
+            # 获取跌停板（支持历史数据）
             try:
-                limit_down_df = self._retry_fetch(ak.stock_zt_pool_dtgc_em, date=date.replace('-', ''))
-                limit_down_count = 0 if limit_down_df is None or limit_down_df.empty else len(limit_down_df)
-            except:
-                logger.warning(f"获取跌停池失败 (日期: {date})")
-                limit_down_count = 0
+                date_fmt = date.replace('-', '')
+                limit_down_df = self._retry_fetch(ak.stock_zt_pool_dtgc_em, date=date_fmt)
+                if limit_down_df is not None and not limit_down_df.empty:
+                    limit_down_count = len(limit_down_df)
+            except Exception as e:
+                logger.warning(f"获取跌停池失败 (日期: {date}): {e}")
 
             return {
                 'date': date,
@@ -355,7 +396,17 @@ class AkShareProvider:
 
         except Exception as e:
             logger.error(f"获取市场广度失败: {e}")
-            raise DataValidationError(f"市场广度数据获取失败: {e}")
+            # 返回默认值而不是抛出异常
+            return {
+                'date': date,
+                'up_count': 0,
+                'down_count': 0,
+                'flat_count': 0,
+                'limit_up_count': 0,
+                'limit_down_count': 0,
+                'max_continuous_limit_up': 0,
+                'continuous_limit_rate': 0.0
+            }
 
     def fetch_northbound(self, date: str) -> Dict[str, float]:
         """
@@ -402,7 +453,13 @@ class AkShareProvider:
 
         except Exception as e:
             logger.error(f"获取北向资金失败: {e}")
-            raise DataValidationError(f"北向资金数据获取失败: {e}")
+            # 返回默认值而不是抛出异常
+            return {
+                'date': date,
+                'net_flow': 0.0,
+                'sh_net': 0.0,
+                'sz_net': 0.0
+            }
 
     def fetch_etf_flows(self, date: str) -> List[Dict]:
         """
@@ -512,18 +569,32 @@ class AkShareProvider:
         """
         聚合行业数据
 
+        注意：AkShare 的 stock_zh_a_spot_em 只能获取当天数据
+        对于历史日期无法获取行业数据
+
         Args:
-            date: 日期
+            date: 日期 YYYY-MM-DD
 
         Returns:
             行业数据DataFrame
         """
+        from datetime import datetime
+
         try:
-            # 获取A股实时数据
+            # 检查是否为当天
+            today = datetime.now().strftime('%Y-%m-%d')
+            is_today = (date == today)
+
+            if not is_today:
+                logger.warning(f"无法获取历史行业数据 (日期: {date})，AkShare只支持当天数据")
+                return pd.DataFrame()
+
+            # 获取A股实时数据（仅当天）
             spot_df = self._retry_fetch(ak.stock_zh_a_spot_em)
 
             if spot_df is None or spot_df.empty:
-                raise DataValidationError("A股快照数据为空")
+                logger.warning("A股快照数据为空")
+                return pd.DataFrame()
 
             # 查找行业字段
             industry_col = None
@@ -536,14 +607,42 @@ class AkShareProvider:
                 logger.warning("未找到行业字段")
                 return pd.DataFrame()
 
-            # 按行业分组聚合
-            industry_stats = spot_df.groupby(industry_col).agg({
-                '涨跌幅': 'mean',
-                '换手率': 'mean',
-                '主力净流入': 'sum' if '主力净流入' in spot_df.columns else lambda x: 0
-            }).reset_index()
+            # 检查必需的列是否存在
+            if '涨跌幅' not in spot_df.columns:
+                logger.warning("数据中缺少涨跌幅列")
+                return pd.DataFrame()
 
-            industry_stats.columns = ['industry_name', 'avg_return', 'avg_turnover', 'net_flow']
+            # 按行业分组聚合
+            agg_dict = {
+                '涨跌幅': 'mean'
+            }
+
+            # 可选列
+            if '换手率' in spot_df.columns:
+                agg_dict['换手率'] = 'mean'
+            if '主力净流入' in spot_df.columns:
+                agg_dict['主力净流入'] = 'sum'
+
+            industry_stats = spot_df.groupby(industry_col).agg(agg_dict).reset_index()
+
+            # 重命名列
+            col_mapping = {
+                industry_col: 'industry_name',
+                '涨跌幅': 'avg_return'
+            }
+            if '换手率' in industry_stats.columns:
+                col_mapping['换手率'] = 'avg_turnover'
+            if '主力净流入' in industry_stats.columns:
+                col_mapping['主力净流入'] = 'net_flow'
+
+            industry_stats = industry_stats.rename(columns=col_mapping)
+
+            # 添加缺失的列
+            if 'avg_turnover' not in industry_stats.columns:
+                industry_stats['avg_turnover'] = 0.0
+            if 'net_flow' not in industry_stats.columns:
+                industry_stats['net_flow'] = 0.0
+
             industry_stats['date'] = date
 
             # 计算涨停家数
