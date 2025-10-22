@@ -179,8 +179,10 @@ class MarksPendulum:
             m2_data = self.data_loader.get_macro_data('m2', use_mock=False)
 
             if not m2_data.empty and len(m2_data) >= 2:
-                # 获取最新M2增速
-                m2_growth = float(m2_data.iloc[-1, 1])
+                # 获取最新M2增速（第3列：M2-同比增长）
+                m2_growth_str = str(m2_data.iloc[-1, 2])
+                # 去掉百分号并转换为浮点数
+                m2_growth = float(m2_growth_str.replace('%', ''))
 
                 # M2增速越高，流动性越宽松，得分越高
                 # 假设M2增速范围为5%-15%

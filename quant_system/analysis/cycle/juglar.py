@@ -215,18 +215,20 @@ class JuglarCycle:
     # ==================== 私有方法 ====================
 
     def _get_fixed_investment(self) -> float:
-        """获取固定资产投资增速（真实数据）"""
+        """获取固定资产投资增速（使用GDP增速作为代理）
+
+        注意：AkShare macro_china_gdp_yearly 返回的列结构：
+        商品(0), 日期(1), 今值(2-GDP年率), 预测值(3), 前值(4)
+        这里使用GDP年率作为固定资产投资增速的代理指标
+        """
         try:
-            # 从GDP数据中获取固定资产投资增速
+            # 从GDP数据中获取GDP增速，作为固定资产投资增速的代理
             gdp_data = self.data_loader.get_macro_data('gdp', use_mock=False)
 
-            if not gdp_data.empty and len(gdp_data) >= 2:
-                # 假设固定资产投资增速在GDP数据中，或者使用GDP增速作为代理
-                current = float(gdp_data.iloc[-1, 1])
-                previous = float(gdp_data.iloc[-2, 1])
-
-                # 计算固定资产投资增速（使用GDP增速作为代理指标）
-                investment_growth = ((current - previous) / previous) * 100
+            if not gdp_data.empty:
+                # 列结构：商品(0), 日期(1), 今值(2-GDP年率), 预测值(3), 前值(4)
+                # 今值就是GDP年率，用它作为固定资产投资增速的代理
+                investment_growth = float(gdp_data.iloc[-1, 2])
 
                 self.logger.info(f"固定资产投资增速（真实数据）: {investment_growth:.2f}%")
                 return investment_growth
@@ -239,17 +241,19 @@ class JuglarCycle:
             return np.random.uniform(-2, 10)
 
     def _get_ppi_yoy(self) -> float:
-        """获取PPI同比（真实数据）"""
+        """获取PPI同比（真实数据）
+
+        注意：AkShare macro_china_ppi_yearly 返回的列结构：
+        商品(0), 日期(1), 今值(2), 预测值(3), 前值(4)
+        今值就是PPI同比数据，直接使用即可
+        """
         try:
             ppi_data = self.data_loader.get_macro_data('ppi', use_mock=False)
 
-            if not ppi_data.empty and len(ppi_data) >= 2:
-                # 获取最新的PPI值
-                current = float(ppi_data.iloc[-1, 1])
-                year_ago = float(ppi_data.iloc[-13, 1]) if len(ppi_data) >= 13 else float(ppi_data.iloc[0, 1])
-
-                # 计算PPI同比
-                ppi_yoy = ((current - year_ago) / year_ago) * 100
+            if not ppi_data.empty:
+                # 列结构：商品(0), 日期(1), 今值(2-PPI同比), 预测值(3), 前值(4)
+                # 今值就是PPI同比数据
+                ppi_yoy = float(ppi_data.iloc[-1, 2])
 
                 self.logger.info(f"PPI同比（真实数据）: {ppi_yoy:.2f}%")
                 return ppi_yoy
@@ -279,12 +283,10 @@ class JuglarCycle:
             m2_data = self.data_loader.get_macro_data('m2', use_mock=False)
 
             if not m2_data.empty and len(m2_data) >= 2:
-                # 获取M2同比增速作为信贷增速的代理指标
-                current = float(m2_data.iloc[-1, 1])
-                previous = float(m2_data.iloc[-2, 1])
-
-                # M2增速
-                credit_growth = current  # M2数据通常已经是同比增速
+                # 获取M2同比增速作为信贷增速的代理指标（第3列：M2-同比增长）
+                m2_growth_str = str(m2_data.iloc[-1, 2])
+                # 去掉百分号并转换为浮点数
+                credit_growth = float(m2_growth_str.replace('%', ''))
 
                 self.logger.info(f"信贷增速（M2同比，真实数据）: {credit_growth:.2f}%")
                 return credit_growth

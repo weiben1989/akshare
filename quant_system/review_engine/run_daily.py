@@ -30,7 +30,7 @@ import numpy as np
 # 添加当前目录到路径（支持直接导入）
 sys.path.insert(0, str(Path(__file__).parent))
 
-from providers.akshare_provider import AKShareProvider
+from providers.akshare_provider import AkShareProvider
 from core.factors import FactorCalculator, create_factor_summary
 from core.scoring import FourDimensionScorer
 from core.allocation import AssetAllocator
@@ -65,7 +65,7 @@ class DailyReviewEngine:
         logger.info("配置加载成功")
 
         # 初始化各组件
-        self.provider = AKShareProvider(self.config)
+        self.provider = AkShareProvider(self.config)
         self.factor_calc = FactorCalculator(self.config)
         self.scorer = FourDimensionScorer(self.config)
         self.allocator = AssetAllocator(self.config)

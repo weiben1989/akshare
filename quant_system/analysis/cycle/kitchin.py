@@ -248,22 +248,25 @@ class KitchinCycle:
     # ==================== 私有方法 ====================
 
     def _get_inventory_growth(self) -> float:
-        """获取库存增速（真实数据）"""
+        """获取库存增速（基于PMI同比增长估算）
+
+        注意：AkShare 的 macro_china_pmi 没有提供PMI分项数据（产成品库存等）
+        这里使用PMI制造业同比增长作为库存周期的代理指标
+        """
         try:
-            # 从PMI数据中提取产成品库存指数
+            # 从PMI数据中提取制造业同比增长
             pmi_data = self.data_loader.get_macro_data('pmi', use_mock=False)
 
             if not pmi_data.empty and len(pmi_data) >= 2:
-                # 计算库存增速：当月库存指数 - 上月库存指数
-                # PMI产成品库存通常在第3或第4列
-                current = float(pmi_data.iloc[-1, 3]) if len(pmi_data.columns) > 3 else 50.0
-                previous = float(pmi_data.iloc[-2, 3]) if len(pmi_data.columns) > 3 else 50.0
+                # 列结构：月份(0), 制造业-指数(1), 制造业-同比增长(2), 非制造业-指数(3), 非制造业-同比增长(4)
+                # 使用制造业同比增长作为库存周期的估算
+                growth_str = str(pmi_data.iloc[-1, 2])
+                inventory_growth = float(growth_str.replace('%', ''))
 
-                # 转换为增速：(当前-50) - (上期-50)
-                # PMI指数>50表示扩张，<50表示收缩
-                inventory_growth = (current - 50) - (previous - 50)
+                pmi_current = float(pmi_data.iloc[-1, 1])
+                pmi_previous = float(pmi_data.iloc[-2, 1])
 
-                self.logger.info(f"库存增速（真实数据）: {inventory_growth:.2f}% (当前PMI库存: {current:.1f}, 上期: {previous:.1f})")
+                self.logger.info(f"库存增速（基于PMI同比估算）: {inventory_growth:.2f}% (当前PMI: {pmi_current:.1f}, 上期: {pmi_previous:.1f})")
                 return inventory_growth
             else:
                 self.logger.warning("PMI数据不足，使用模拟数据")
@@ -274,20 +277,25 @@ class KitchinCycle:
             return np.random.uniform(-5, 5)
 
     def _get_demand_growth(self) -> float:
-        """获取需求增速（真实数据）"""
+        """获取需求增速（基于PMI指数估算）
+
+        注意：AkShare 的 macro_china_pmi 没有提供新订单分项数据
+        这里使用PMI制造业指数作为需求的代理指标
+        """
         try:
-            # 使用PMI新订单指数作为需求代理指标
+            # 使用PMI制造业指数作为需求代理指标
             pmi_data = self.data_loader.get_macro_data('pmi', use_mock=False)
 
             if not pmi_data.empty and len(pmi_data) >= 2:
-                # PMI新订单通常在第2或第3列
-                current = float(pmi_data.iloc[-1, 2]) if len(pmi_data.columns) > 2 else 50.0
-                previous = float(pmi_data.iloc[-2, 2]) if len(pmi_data.columns) > 2 else 50.0
+                # 列结构：月份(0), 制造业-指数(1), 制造业-同比增长(2), ...
+                current = float(pmi_data.iloc[-1, 1])
+                previous = float(pmi_data.iloc[-2, 1])
 
-                # 计算需求增速
-                demand_growth = (current - 50) * 2  # 放大系数，将PMI转换为类似增速的概念
+                # 计算需求增速：PMI>50表示扩张，<50表示收缩
+                # 将PMI转换为类似增速的概念：(PMI-50)*2
+                demand_growth = (current - 50) * 2
 
-                self.logger.info(f"需求增速（真实数据）: {demand_growth:.2f}% (当前PMI新订单: {current:.1f}, 上期: {previous:.1f})")
+                self.logger.info(f"需求增速（基于PMI估算）: {demand_growth:.2f}% (当前PMI: {current:.1f}, 上期: {previous:.1f})")
                 return demand_growth
             else:
                 self.logger.warning("PMI数据不足，使用模拟数据")
@@ -298,15 +306,20 @@ class KitchinCycle:
             return np.random.uniform(-3, 8)
 
     def _get_pmi_inventory(self) -> float:
-        """获取PMI产成品库存指数（真实数据）"""
+        """获取PMI产成品库存指数（基于PMI总指数估算）
+
+        注意：AkShare 没有提供PMI产成品库存分项数据
+        这里返回PMI制造业指数作为估算值
+        """
         try:
             pmi_data = self.data_loader.get_macro_data('pmi', use_mock=False)
 
             if not pmi_data.empty:
-                # 获取最新的PMI产成品库存指数
-                pmi_inventory = float(pmi_data.iloc[-1, 3]) if len(pmi_data.columns) > 3 else 50.0
+                # 列结构：月份(0), 制造业-指数(1), ...
+                # 使用制造业PMI作为估算
+                pmi_inventory = float(pmi_data.iloc[-1, 1])
 
-                self.logger.info(f"PMI产成品库存指数（真实数据）: {pmi_inventory:.2f}")
+                self.logger.info(f"PMI产成品库存指数（基于PMI总指数估算）: {pmi_inventory:.2f}")
                 return pmi_inventory
             else:
                 return 50.0
@@ -316,15 +329,20 @@ class KitchinCycle:
             return 50.0
 
     def _get_pmi_new_orders(self) -> float:
-        """获取PMI新订单指数（真实数据）"""
+        """获取PMI新订单指数（基于PMI总指数估算）
+
+        注意：AkShare 没有提供PMI新订单分项数据
+        这里返回PMI制造业指数作为估算值
+        """
         try:
             pmi_data = self.data_loader.get_macro_data('pmi', use_mock=False)
 
             if not pmi_data.empty:
-                # 获取最新的PMI新订单指数
-                pmi_new_orders = float(pmi_data.iloc[-1, 2]) if len(pmi_data.columns) > 2 else 50.0
+                # 列结构：月份(0), 制造业-指数(1), ...
+                # 使用制造业PMI作为估算
+                pmi_new_orders = float(pmi_data.iloc[-1, 1])
 
-                self.logger.info(f"PMI新订单指数（真实数据）: {pmi_new_orders:.2f}")
+                self.logger.info(f"PMI新订单指数（基于PMI总指数估算）: {pmi_new_orders:.2f}")
                 return pmi_new_orders
             else:
                 return 50.0
@@ -334,18 +352,24 @@ class KitchinCycle:
             return 50.0
 
     def _get_ppi_mom(self) -> float:
-        """获取PPI环比（真实数据）"""
+        """获取PPI环比（基于PPI同比估算）
+
+        注意：AkShare macro_china_ppi_yearly 返回的是PPI同比数据
+        列结构：商品(0), 日期(1), 今值(2), 预测值(3), 前值(4)
+        这里使用 今值-前值 来估算环比变化
+        """
         try:
             ppi_data = self.data_loader.get_macro_data('ppi', use_mock=False)
 
-            if not ppi_data.empty and len(ppi_data) >= 2:
-                # 计算PPI环比增速
-                current = float(ppi_data.iloc[-1, 1])
-                previous = float(ppi_data.iloc[-2, 1])
+            if not ppi_data.empty and len(ppi_data) >= 1:
+                # 列结构：商品(0), 日期(1), 今值(2-PPI同比), 预测值(3), 前值(4-上期PPI同比)
+                current = float(ppi_data.iloc[-1, 2])  # 今值（PPI同比）
+                previous = float(ppi_data.iloc[-1, 4])  # 前值（上期PPI同比）
 
-                ppi_mom = ((current - previous) / previous) * 100
+                # 用今值与前值的差来近似环比变化
+                ppi_mom = current - previous
 
-                self.logger.info(f"PPI环比（真实数据）: {ppi_mom:.2f}%")
+                self.logger.info(f"PPI环比（基于同比估算）: {ppi_mom:.2f}%")
                 return ppi_mom
             else:
                 return 0.0
