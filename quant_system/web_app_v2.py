@@ -756,7 +756,7 @@ elif page == "📈 周期分析":
             plot_bgcolor='rgba(0,0,0,0)'
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
         st.markdown(f"""
         <div class="apple-card">
@@ -886,7 +886,7 @@ elif page == "💰 资产配置":
 
     allocation_df = allocation_df[allocation_df['配置比例'] != allocation_info['allocation']['description']]
 
-    st.dataframe(allocation_df, use_container_width=True, hide_index=True)
+    st.dataframe(allocation_df, width='stretch', hide_index=True)
 
     st.markdown(f"""
     <div class="analysis-detail">
@@ -918,7 +918,7 @@ elif page == "💰 资产配置":
         '配置比例': [f"{v*100:.0f}%" for v in swensen_allocation['allocation'].values()]
     })
 
-    st.dataframe(swensen_df, use_container_width=True, hide_index=True)
+    st.dataframe(swensen_df, width='stretch', hide_index=True)
 
     st.markdown(f"""
     <div class="analysis-detail">
@@ -952,7 +952,7 @@ elif page == "💰 资产配置":
 
         st.dataframe(
             rebalance_df[['asset', '当前', '目标', '偏差', 'action', '调整幅度', 'priority']],
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             column_config={
                 'asset': '资产',
@@ -1049,7 +1049,7 @@ elif page == "🔍 日度复盘":
         st.markdown(f"<p style='color: #1d1d1f; font-size: 16px;'>已选择: <strong>{selected_date}</strong></p>", unsafe_allow_html=True)
 
     with col3:
-        generate_btn = st.button("🚀 生成复盘", type="primary", use_container_width=True)
+        generate_btn = st.button("🚀 生成复盘", type="primary", width='stretch')
 
     st.markdown("---")
 
@@ -1100,7 +1100,7 @@ elif page == "🔍 日度复盘":
                 data=report['markdown'],
                 file_name=f"report_{report['date']}.md",
                 mime="text/markdown",
-                use_container_width=True
+                width='stretch'
             )
 
         with col2:
@@ -1109,7 +1109,7 @@ elif page == "🔍 日度复盘":
                 data=json.dumps(report['json'], ensure_ascii=False, indent=2),
                 file_name=f"report_{report['date']}.json",
                 mime="application/json",
-                use_container_width=True
+                width='stretch'
             )
 
         st.markdown("---")
@@ -1210,7 +1210,7 @@ elif page == "🔄 数据管理":
         '数据天数': [f"{cache_status.get('age_days', 0)}天前"] * 4 if cache_status['has_cache'] else ['-'] * 4
     })
 
-    st.dataframe(status_df, use_container_width=True, hide_index=True)
+    st.dataframe(status_df, width='stretch', hide_index=True)
 
     # 更新数据按钮
     st.markdown('<h3 class="subsection-title">🔄 更新数据</h3>', unsafe_allow_html=True)
