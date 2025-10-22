@@ -121,7 +121,7 @@ logging:
 # 数据校验
 validation:
   required_columns:
-    indices: ["date", "close", "volume", "amount"]
+    indices: ["date", "close", "volume"]  # 移除amount，AkShare指数数据不包含此列
     breadth: ["date", "up_count", "down_count", "flat_count"]
     northbound: ["date", "net_flow"]
     margin: ["date", "balance"]
