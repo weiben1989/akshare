@@ -48,6 +48,30 @@ pip install akshare -i http://mirrors.aliyun.com/pypi/simple/ --trusted-host=mir
 Please check out [Documentation](https://akshare.akfamily.xyz/contributing.html) if you
 want to contribute to AKShare
 
+### Daily Review Engine Quick Start
+
+The A 股日度复盘引擎 introduced in this branch ships with a helper script that
+creates a virtual environment, installs the required dependencies (including
+`SQLAlchemy`, `PyYAML`, `python-dotenv`, and `pyarrow`), and then executes the
+daily pipeline in a single command:
+
+```bash
+git clone https://github.com/akfamily/akshare.git
+cd akshare
+./scripts/bootstrap_daily_review.sh DATE=2024-03-01
+```
+
+The script accepts optional environment variables:
+
+- `DATE`: 目标交易日（默认当天）；
+- `EXPORT_DIR`: 输出目录（默认 `out`）；
+- `CONFIG`: 自定义配置文件路径；
+- `ENABLE_DEEPSEEK` / `DISABLE_DEEPSEEK`: 强制覆盖 DeepSeek 开关；
+- `SKIP_INSTALL=1`: 若已手动安装依赖，可跳过重复安装步骤。
+
+完成后，生成的 Markdown 和 JSON 报告会保存在指定的导出目录。首次
+运行会自动在项目根目录创建 `.venv/` 虚拟环境以及 `data/` 数据仓库。
+
 ### Docker
 
 #### Pull images
